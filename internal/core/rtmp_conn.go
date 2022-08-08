@@ -47,6 +47,7 @@ const (
 )
 
 type rtmpConnPathManager interface {
+	getSession(path string ) string
 	readerSetupPlay(req pathReaderSetupPlayReq) pathReaderSetupPlayRes
 	publisherAnnounce(req pathPublisherAnnounceReq) pathPublisherAnnounceRes
 }
@@ -769,4 +770,8 @@ func (c *rtmpConn) onPublisherAccepted(tracksLen int) {
 			}
 			return "tracks"
 		}())
+}
+
+func (c *rtmpConn) getPath() string {
+	return c.path.name
 }

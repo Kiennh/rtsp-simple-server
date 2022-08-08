@@ -96,8 +96,8 @@ func (v *muxerVariantFMP4) writeAAC(pts time.Duration, aus [][]byte) error {
 	return v.segmenter.writeAAC(pts, aus)
 }
 
-func (v *muxerVariantFMP4) file(name string, msn string, part string, skip string) *MuxerFileResponse {
-	if name == "init.mp4" {
+func (v *muxerVariantFMP4) file(name, session string, msn string, part string, skip string) *MuxerFileResponse {
+	if name == "init.m4s" || name == "init.mp4" {
 		v.mutex.Lock()
 		defer v.mutex.Unlock()
 

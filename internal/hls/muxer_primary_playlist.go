@@ -29,7 +29,7 @@ func newMuxerPrimaryPlaylist(
 	}
 }
 
-func (p *muxerPrimaryPlaylist) file() *MuxerFileResponse {
+func (p *muxerPrimaryPlaylist) file(session string) *MuxerFileResponse {
 	return &MuxerFileResponse{
 		Status: http.StatusOK,
 		Header: map[string]string{
@@ -57,7 +57,7 @@ func (p *muxerPrimaryPlaylist) file() *MuxerFileResponse {
 					"#EXT-X-INDEPENDENT-SEGMENTS\n" +
 					"\n" +
 					"#EXT-X-STREAM-INF:BANDWIDTH=200000,CODECS=\"" + strings.Join(codecs, ",") + "\"\n" +
-					"stream.m3u8\n"))
+					session + "/stream.m3u8\n"))
 
 			default:
 				return bytes.NewReader([]byte("#EXTM3U\n" +
@@ -65,7 +65,7 @@ func (p *muxerPrimaryPlaylist) file() *MuxerFileResponse {
 					"#EXT-X-INDEPENDENT-SEGMENTS\n" +
 					"\n" +
 					"#EXT-X-STREAM-INF:BANDWIDTH=200000,CODECS=\"" + strings.Join(codecs, ",") + "\"\n" +
-					"stream.m3u8\n" +
+					session + "/stream.m3u8\n" +
 					"\n"))
 			}
 		}(),

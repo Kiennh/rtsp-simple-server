@@ -266,12 +266,11 @@ func (c *rtspConn) onDescribe(ctx *gortsplib.ServerHandlerOnDescribeCtx,
 			<-time.After(rtspConnPauseAfterAuthError)
 
 			return terr.response, nil, errors.New(terr.message)
-
 		case pathErrNoOnePublishing:
+
 			return &base.Response{
 				StatusCode: base.StatusNotFound,
 			}, nil, res.err
-
 		default:
 			return &base.Response{
 				StatusCode: base.StatusBadRequest,

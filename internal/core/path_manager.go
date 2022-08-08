@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"github.com/google/uuid"
 	"sync"
 
 	"github.com/aler9/rtsp-simple-server/internal/conf"
@@ -36,6 +37,10 @@ type pathManager struct {
 	paths     map[string]*path
 
 	// in
+
+	sessionLock *sync.RWMutex
+	session     map[string]string
+
 	chConfReload         chan map[string]*conf.PathConf
 	chPathClose          chan *path
 	chPathSourceReady    chan *path
@@ -61,6 +66,8 @@ func newPathManager(
 	ctx, ctxCancel := context.WithCancel(parentCtx)
 
 	pm := &pathManager{
+		sessionLock:       new(sync.RWMutex),
+		session:           make(map[string]string),
 		rtspAddress:          rtspAddress,
 		readTimeout:          readTimeout,
 		writeTimeout:         writeTimeout,
@@ -369,6 +376,12 @@ func (pm *pathManager) publisherAnnounce(req pathPublisherAnnounceReq) pathPubli
 	req.res = make(chan pathPublisherAnnounceRes)
 	select {
 	case pm.chPublisherAnnounce <- req:
+
+		pm.sessionLock.Lock()
+		pm.session[req.pathName] = SESSION_PATH + uuid.New().String()
+		pm.sessionLock.Unlock()
+
+
 		res := <-req.res
 		if res.err != nil {
 			return res
@@ -396,6 +409,10 @@ func (pm *pathManager) readerSetupPlay(req pathReaderSetupPlayReq) pathReaderSet
 	case <-pm.ctx.Done():
 		return pathReaderSetupPlayRes{err: fmt.Errorf("terminated")}
 	}
+}
+
+func (pm *pathManager) getSession(path string) string {
+	return pm.session[path]
 }
 
 // hlsServerSet is called by hlsServer.

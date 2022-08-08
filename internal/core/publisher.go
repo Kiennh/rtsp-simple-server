@@ -5,4 +5,5 @@ type publisher interface {
 	source
 	close()
 	onPublisherAccepted(tracksLen int)
+	getPath() string
 }

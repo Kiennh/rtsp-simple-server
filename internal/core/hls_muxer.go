@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -103,6 +104,7 @@ type hlsMuxerRequest struct {
 
 type hlsMuxerPathManager interface {
 	readerSetupPlay(req pathReaderSetupPlayReq) pathReaderSetupPlayRes
+	getSession(path string) string
 }
 
 type hlsMuxerParent interface {
@@ -449,10 +451,15 @@ func (m *hlsMuxer) handleRequest(req *hlsMuxerRequest) func() *hls.MuxerFileResp
 			}
 		}
 	}
-
+	dir := req.dir
+	splitedPath := strings.Split(dir, "/"+SESSION_PATH)
+	if len(splitedPath) == 2 {
+		dir = splitedPath[0]
+	}
 	return func() *hls.MuxerFileResponse {
 		return m.muxer.File(
 			req.file,
+			m.pathManager.getSession(dir),
 			req.ctx.Query("_HLS_msn"),
 			req.ctx.Query("_HLS_part"),
 			req.ctx.Query("_HLS_skip"))

@@ -64,6 +64,7 @@ type pathParent interface {
 	pathSourceReady(*path)
 	pathSourceNotReady(*path)
 	onPathClose(*path)
+	getSession(path string) string
 }
 
 type pathRTSPSession interface {
@@ -1053,6 +1054,10 @@ func (pa *path) readerSetupPlay(req pathReaderSetupPlayReq) pathReaderSetupPlayR
 	case <-pa.ctx.Done():
 		return pathReaderSetupPlayRes{err: fmt.Errorf("terminated")}
 	}
+}
+
+func (pa *path) getSession(path string) string {
+	return pa.parent.getSession(path)
 }
 
 // readerPlay is called by a reader.

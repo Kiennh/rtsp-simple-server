@@ -294,7 +294,8 @@ func (s *hlsServer) onRequest(ctx *gin.Context) {
 	dir, fname := func() (string, string) {
 		if strings.HasSuffix(pa, ".m3u8") ||
 			strings.HasSuffix(pa, ".ts") ||
-			strings.HasSuffix(pa, ".mp4") {
+			strings.HasSuffix(pa, ".mp4") ||
+			strings.HasSuffix(pa, ".m4s") {
 			return gopath.Dir(pa), gopath.Base(pa)
 		}
 		return pa, ""
@@ -338,7 +339,13 @@ func (s *hlsServer) onRequest(ctx *gin.Context) {
 	s.log(logger.Debug, "[conn %v] [s->c] %s", ctx.ClientIP(), logw.dump())
 }
 
+const SESSION_PATH = "session-"
+
 func (s *hlsServer) findOrCreateMuxer(pathName string, remoteAddr string, req *hlsMuxerRequest) *hlsMuxer {
+	pathSplit := strings.Split(pathName, "/"+SESSION_PATH)
+	if len(pathSplit) == 2 {
+		pathName = pathSplit[0]
+	}
 	r, ok := s.muxers[pathName]
 	if !ok {
 		r = newHLSMuxer(

@@ -20,6 +20,7 @@ const (
 )
 
 type rtspSessionPathManager interface {
+	getSession(path string) string
 	publisherAnnounce(req pathPublisherAnnounceReq) pathPublisherAnnounceRes
 	readerSetupPlay(req pathReaderSetupPlayReq) pathReaderSetupPlayRes
 }
@@ -388,6 +389,10 @@ func (s *rtspSession) onPublisherAccepted(tracksLen int) {
 			return "tracks"
 		}(),
 		s.ss.SetuppedTransport())
+}
+
+func (s *rtspSession) getPath() string {
+	return s.path.name
 }
 
 // onPacketRTP is called by rtspServer.

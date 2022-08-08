@@ -13,6 +13,8 @@ import (
 	"github.com/aler9/gortsplib"
 )
 
+const SEGMENT_CONTAINER = ".m4s"
+
 type muxerVariantFMP4SegmentOrGap interface {
 	getRenderedDuration() time.Duration
 }
@@ -165,7 +167,7 @@ func (p *muxerVariantFMP4Playlist) file(name string, msn string, part string, sk
 	case name == "stream.m3u8":
 		return p.playlistReader(msn, part, skip)
 
-	case strings.HasSuffix(name, ".mp4"):
+	case strings.HasSuffix(name, SEGMENT_CONTAINER):
 		return p.segmentReader(name)
 
 	default:
@@ -293,7 +295,7 @@ func (p *muxerVariantFMP4Playlist) fullPlaylist(isDeltaUpdate bool) io.Reader {
 	skipped := 0
 
 	if !isDeltaUpdate {
-		cnt += "#EXT-X-MAP:URI=\"init.mp4\"\n"
+		cnt += "#EXT-X-MAP:URI=\"init" + SEGMENT_CONTAINER + "\"\n"
 	} else {
 		var curDuration time.Duration
 		shown := 0
@@ -324,7 +326,7 @@ func (p *muxerVariantFMP4Playlist) fullPlaylist(isDeltaUpdate bool) io.Reader {
 			if p.lowLatency && (len(p.segments)-i) <= 2 {
 				for _, part := range seg.parts {
 					cnt += "#EXT-X-PART:DURATION=" + strconv.FormatFloat(part.renderedDuration.Seconds(), 'f', 5, 64) +
-						",URI=\"" + part.name() + ".mp4\""
+						",URI=\"" + part.name() + SEGMENT_CONTAINER + "\""
 					if part.isIndependent {
 						cnt += ",INDEPENDENT=YES"
 					}
@@ -333,19 +335,19 @@ func (p *muxerVariantFMP4Playlist) fullPlaylist(isDeltaUpdate bool) io.Reader {
 			}
 
 			cnt += "#EXTINF:" + strconv.FormatFloat(seg.renderedDuration.Seconds(), 'f', 5, 64) + ",\n" +
-				seg.name() + ".mp4\n"
+				seg.name() + SEGMENT_CONTAINER + "\n"
 
 		case *muxerVariantFMP4Gap:
 			cnt += "#EXT-X-GAP\n" +
 				"#EXTINF:" + strconv.FormatFloat(seg.renderedDuration.Seconds(), 'f', 5, 64) + ",\n" +
-				"gap.mp4\n"
+				"gap" + SEGMENT_CONTAINER + "\n"
 		}
 	}
 
 	if p.lowLatency {
 		for _, part := range p.nextSegmentParts {
 			cnt += "#EXT-X-PART:DURATION=" + strconv.FormatFloat(part.renderedDuration.Seconds(), 'f', 5, 64) +
-				",URI=\"" + part.name() + ".mp4\""
+				",URI=\"" + part.name() + SEGMENT_CONTAINER + "\""
 			if part.isIndependent {
 				cnt += ",INDEPENDENT=YES"
 			}
@@ -354,7 +356,7 @@ func (p *muxerVariantFMP4Playlist) fullPlaylist(isDeltaUpdate bool) io.Reader {
 
 		// preload hint must always be present
 		// otherwise hls.js goes into a loop
-		cnt += "#EXT-X-PRELOAD-HINT:TYPE=PART,URI=\"" + fmp4PartName(p.nextPartID) + ".mp4\"\n"
+		cnt += "#EXT-X-PRELOAD-HINT:TYPE=PART,URI=\"" + fmp4PartName(p.nextPartID) + SEGMENT_CONTAINER + "\"\n"
 	}
 
 	return bytes.NewReader([]byte(cnt))
@@ -363,7 +365,7 @@ func (p *muxerVariantFMP4Playlist) fullPlaylist(isDeltaUpdate bool) io.Reader {
 func (p *muxerVariantFMP4Playlist) segmentReader(fname string) *MuxerFileResponse {
 	switch {
 	case strings.HasPrefix(fname, "seg"):
-		base := strings.TrimSuffix(fname, ".mp4")
+		base := strings.TrimSuffix(fname, SEGMENT_CONTAINER)
 
 		p.mutex.Lock()
 		segment, ok := p.segmentsByName[base]
@@ -382,7 +384,7 @@ func (p *muxerVariantFMP4Playlist) segmentReader(fname string) *MuxerFileRespons
 		}
 
 	case strings.HasPrefix(fname, "part"):
-		base := strings.TrimSuffix(fname, ".mp4")
+		base := strings.TrimSuffix(fname, SEGMENT_CONTAINER)
 
 		p.mutex.Lock()
 		part, ok := p.partsByName[base]

@@ -41,9 +41,9 @@ func (p *muxerVariantMPEGTSPlaylist) close() {
 	p.cond.Broadcast()
 }
 
-func (p *muxerVariantMPEGTSPlaylist) file(name string) *MuxerFileResponse {
+func (p *muxerVariantMPEGTSPlaylist) file(name, session string) *MuxerFileResponse {
 	switch {
-	case name == "stream.m3u8":
+	case name == "stream.m3u8" || name == session+"/stream.m3u8":
 		return p.playlistReader()
 
 	case strings.HasSuffix(name, ".ts"):

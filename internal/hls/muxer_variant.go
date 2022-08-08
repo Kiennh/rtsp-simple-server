@@ -18,5 +18,5 @@ type muxerVariant interface {
 	close()
 	writeH264(pts time.Duration, nalus [][]byte) error
 	writeAAC(pts time.Duration, aus [][]byte) error
-	file(name string, msn string, part string, skip string) *MuxerFileResponse
+	file(name, session, msn string, part string, skip string) *MuxerFileResponse
 }
