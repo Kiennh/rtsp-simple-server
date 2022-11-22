@@ -1,5 +1,9 @@
 /tmp
-/release
+/binaries
 /coverage*.txt
 /apidocs/*.html
 .idea
+deploy
+out
+run-local.sh
+vendor

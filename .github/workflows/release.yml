@@ -6,13 +6,48 @@ on:
     - 'v*'
 
 jobs:
-  github:
-    runs-on: ubuntu-20.04
+  # make sure that gortsplib is updated
+  check_gortsplib:
+    runs-on: ubuntu-22.04
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
 
-    - run: make release
+    - uses: actions/setup-go@v2
+      with:
+        go-version: "1.18"
+
+    - run: |
+        sed -i '/gortsplib/d' go.mod
+        go mod download
+        go mod tidy
+        git diff --exit-code
+
+  make_binaries:
+    needs: check_gortsplib
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - run: make binaries
+
+    - uses: actions/upload-artifact@v3
+      with:
+        name: binaries
+        path: binaries
+
+  github:
+    needs: make_binaries
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - uses: actions/download-artifact@v3
+      with:
+        name: binaries
+        path: binaries
 
     - uses: actions/github-script@v6
       with:
@@ -23,47 +58,35 @@ jobs:
 
           const currentRelease = context.ref.split('/')[2];
 
-          let res = await github.rest.repos.getLatestRelease({
-            owner,
-            repo,
-          });
-          const previousRelease = res.data['tag_name'];
-
-          res = await github.rest.repos.compareCommitsWithBasehead({
-            owner,
-            repo,
-            basehead: `${previousRelease}...${currentRelease}`,
-          });
-
-          const messages = [];
-          for (const commit of res.data.commits) {
-             messages.push(`* ${commit.commit.message} ${commit.html_url}`);
-          }
-
-          res = await github.rest.repos.createRelease({
+          const res = await github.rest.repos.createRelease({
             owner,
             repo,
             tag_name: currentRelease,
             name: currentRelease,
-            body: `Commits:\n${messages.join('\n')}\n`,
           });
           const release_id = res.data.id;
 
-          for (const name of await fs.readdir('./release/')) {
+          for (const name of await fs.readdir('./binaries/')) {
             await github.rest.repos.uploadReleaseAsset({
               owner,
               repo,
               release_id,
               name,
-              data: await fs.readFile(`./release/${name}`),
+              data: await fs.readFile(`./binaries/${name}`),
             });
           }
 
   dockerhub:
-    runs-on: ubuntu-20.04
+    needs: make_binaries
+    runs-on: ubuntu-22.04
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
+
+    - uses: actions/download-artifact@v3
+      with:
+        name: binaries
+        path: binaries
 
     - run: make dockerhub
       env:
@@ -71,10 +94,11 @@ jobs:
         DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
 
   apidocs:
-    runs-on: ubuntu-20.04
+    needs: make_binaries
+    runs-on: ubuntu-22.04
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
 
     - run: make apidocs-gen
 

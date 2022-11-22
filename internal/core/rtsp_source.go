@@ -11,6 +11,7 @@ import (
 
 	"github.com/aler9/gortsplib"
 	"github.com/aler9/gortsplib/pkg/base"
+	"github.com/pion/rtp"
 
 	"github.com/aler9/gortsplib/pkg/url"
 	"github.com/aler9/rtsp-simple-server/internal/conf"
@@ -97,6 +98,9 @@ func (s *rtspSource) run(ctx context.Context) error {
 		OnResponse: func(res *base.Response) {
 			s.Log(logger.Debug, "s->c %v", res)
 		},
+		OnDecodeError: func(err error) {
+			s.Log(logger.Warn, "%v", err)
+		},
 	}
 
 	u, err := url.Parse(s.ur)
@@ -119,38 +123,51 @@ func (s *rtspSource) run(ctx context.Context) error {
 			}
 
 			for _, t := range tracks {
-				_, err := c.Setup(true, t, baseURL, 0, 0)
+				_, err := c.Setup(t, baseURL, 0, 0)
 				if err != nil {
 					return err
 				}
 			}
 
-			res := s.parent.sourceStaticImplSetReady(pathSourceStaticSetReadyReq{tracks: tracks})
+			res := s.parent.sourceStaticImplSetReady(pathSourceStaticSetReadyReq{
+				tracks:             tracks,
+				generateRTPPackets: false,
+			})
 			if res.err != nil {
 				return res.err
 			}
 
-			s.Log(logger.Info, "ready")
+			s.Log(logger.Info, "ready: %s", sourceTrackInfo(tracks))
 
 			defer func() {
 				s.parent.sourceStaticImplSetNotReady(pathSourceStaticSetNotReadyReq{})
 			}()
 
 			c.OnPacketRTP = func(ctx *gortsplib.ClientOnPacketRTPCtx) {
-				if ctx.H264NALUs != nil {
-					res.stream.writeData(&data{
-						trackID:      ctx.TrackID,
-						rtp:          ctx.Packet,
-						ptsEqualsDTS: ctx.PTSEqualsDTS,
-						h264NALUs:    append([][]byte(nil), ctx.H264NALUs...),
-						h264PTS:      ctx.H264PTS,
+				var err error
+
+				switch tracks[ctx.TrackID].(type) {
+				case *gortsplib.TrackH264:
+					err = res.stream.writeData(&dataH264{
+						trackID:    ctx.TrackID,
+						rtpPackets: []*rtp.Packet{ctx.Packet},
 					})
-				} else {
-					res.stream.writeData(&data{
-						trackID:      ctx.TrackID,
-						rtp:          ctx.Packet,
-						ptsEqualsDTS: ctx.PTSEqualsDTS,
+
+				case *gortsplib.TrackMPEG4Audio:
+					err = res.stream.writeData(&dataMPEG4Audio{
+						trackID:    ctx.TrackID,
+						rtpPackets: []*rtp.Packet{ctx.Packet},
 					})
+
+				default:
+					err = res.stream.writeData(&dataGeneric{
+						trackID:    ctx.TrackID,
+						rtpPackets: []*rtp.Packet{ctx.Packet},
+					})
+				}
+
+				if err != nil {
+					s.Log(logger.Warn, "%v", err)
 				}
 			}
 

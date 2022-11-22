@@ -1,11 +1,10 @@
 package core
 
 import (
-	"bytes"
 	"sync"
+	"sync/atomic"
 
 	"github.com/aler9/gortsplib"
-	"github.com/aler9/gortsplib/pkg/h264"
 )
 
 type streamNonRTSPReadersMap struct {
@@ -37,7 +36,7 @@ func (m *streamNonRTSPReadersMap) remove(r reader) {
 	delete(m.ma, r)
 }
 
-func (m *streamNonRTSPReadersMap) forwardPacketRTP(data *data) {
+func (m *streamNonRTSPReadersMap) writeData(data data) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
@@ -46,17 +45,41 @@ func (m *streamNonRTSPReadersMap) forwardPacketRTP(data *data) {
 	}
 }
 
-type stream struct {
-	nonRTSPReaders *streamNonRTSPReadersMap
-	rtspStream     *gortsplib.ServerStream
+func (m *streamNonRTSPReadersMap) hasReaders() bool {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	return len(m.ma) > 0
 }
 
-func newStream(tracks gortsplib.Tracks) *stream {
+type stream struct {
+	bytesReceived  *uint64
+	nonRTSPReaders *streamNonRTSPReadersMap
+	rtspStream     *gortsplib.ServerStream
+	streamTracks   []streamTrack
+}
+
+func newStream(
+	tracks gortsplib.Tracks,
+	generateRTPPackets bool,
+	bytesReceived *uint64,
+) (*stream, error) {
 	s := &stream{
+		bytesReceived:  bytesReceived,
 		nonRTSPReaders: newStreamNonRTSPReadersMap(),
 		rtspStream:     gortsplib.NewServerStream(tracks),
 	}
-	return s
+
+	s.streamTracks = make([]streamTrack, len(s.rtspStream.Tracks()))
+
+	for i, track := range s.rtspStream.Tracks() {
+		var err error
+		s.streamTracks[i], err = newStreamTrack(track, generateRTPPackets)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return s, nil
 }
 
 func (s *stream) close() {
@@ -80,62 +103,20 @@ func (s *stream) readerRemove(r reader) {
 	}
 }
 
-func (s *stream) updateH264TrackParameters(h264track *gortsplib.TrackH264, nalus [][]byte) {
-	for _, nalu := range nalus {
-		typ := h264.NALUType(nalu[0] & 0x1F)
-
-		switch typ {
-		case h264.NALUTypeSPS:
-			if !bytes.Equal(nalu, h264track.SafeSPS()) {
-				h264track.SafeSetSPS(append([]byte(nil), nalu...))
-			}
-
-		case h264.NALUTypePPS:
-			if !bytes.Equal(nalu, h264track.SafePPS()) {
-				h264track.SafeSetPPS(append([]byte(nil), nalu...))
-			}
-		}
-	}
-}
-
-// remux is needed to
-// - fix corrupted streams
-// - make streams compatible with all protocols
-func (s *stream) remuxH264NALUs(h264track *gortsplib.TrackH264, data *data) {
-	var filteredNALUs [][]byte //nolint:prealloc
-
-	for _, nalu := range data.h264NALUs {
-		typ := h264.NALUType(nalu[0] & 0x1F)
-		switch typ {
-		case h264.NALUTypeSPS, h264.NALUTypePPS:
-			// remove since they're automatically added before every IDR
-			continue
-
-		case h264.NALUTypeAccessUnitDelimiter:
-			// remove since it is not needed
-			continue
-
-		case h264.NALUTypeIDR:
-			// add SPS and PPS before every IDR
-			filteredNALUs = append(filteredNALUs, h264track.SafeSPS(), h264track.SafePPS())
-		}
-
-		filteredNALUs = append(filteredNALUs, nalu)
+func (s *stream) writeData(data data) error {
+	err := s.streamTracks[data.getTrackID()].onData(data, s.nonRTSPReaders.hasReaders())
+	if err != nil {
+		return err
 	}
 
-	data.h264NALUs = filteredNALUs
-}
-
-func (s *stream) writeData(data *data) {
-	track := s.rtspStream.Tracks()[data.trackID]
-	if h264track, ok := track.(*gortsplib.TrackH264); ok {
-		s.updateH264TrackParameters(h264track, data.h264NALUs)
-		s.remuxH264NALUs(h264track, data)
+	// forward RTP packets to RTSP readers
+	for _, pkt := range data.getRTPPackets() {
+		atomic.AddUint64(s.bytesReceived, uint64(pkt.MarshalSize()))
+		s.rtspStream.WritePacketRTP(data.getTrackID(), pkt)
 	}
 
-	// forward to RTSP readers
-	s.rtspStream.WritePacketRTP(data.trackID, data.rtp, data.ptsEqualsDTS)
+	// forward data to non-RTSP readers
+	s.nonRTSPReaders.writeData(data)
 
-	// forward to non-RTSP readers
-	s.nonRTSPReaders.forwardPacketRTP(data)
+	return nil
 }

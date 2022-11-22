@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -80,7 +79,7 @@ y++U32uuSFiXDcSLarfIsE992MEJLSAynbF1Rsgsr3gXbGiuToJRyxbIeVy7gwzD
 `)
 
 func writeTempFile(byts []byte) (string, error) {
-	tmpf, err := ioutil.TempFile(os.TempDir(), "rtsp-")
+	tmpf, err := os.CreateTemp(os.TempDir(), "rtsp-")
 	if err != nil {
 		return "", err
 	}
@@ -121,9 +120,11 @@ func newTestHLSServer(ca string) (*testHLSServer, error) {
 #EXT-X-TARGETDURATION:2
 #EXT-X-MEDIA-SEQUENCE:0
 #EXTINF:2,
-` + segment + "\n"
+` + segment + `
+#EXT-X-ENDLIST
+`
 
-		ctx.Writer.Header().Set("Content-Type", `audio/mpegURL`)
+		ctx.Writer.Header().Set("Content-Type", `application/x-mpegURL`)
 		io.Copy(ctx.Writer, bytes.NewReader([]byte(cnt)))
 	})
 
@@ -154,8 +155,9 @@ func newTestHLSServer(ca string) (*testHLSServer, error) {
 				Header: &astits.PESHeader{
 					OptionalHeader: &astits.PESOptionalHeader{
 						MarkerBits:      2,
-						PTSDTSIndicator: astits.PTSDTSIndicatorOnlyPTS,
-						PTS:             &astits.ClockReference{Base: int64(1 * 90000)},
+						PTSDTSIndicator: astits.PTSDTSIndicatorBothPresent,
+						PTS:             &astits.ClockReference{Base: 90000},                   // +1 sec
+						DTS:             &astits.ClockReference{Base: 0x1FFFFFFFF - 90000 + 1}, // -1 sec
 					},
 					StreamID: 224, // = video
 				},
@@ -214,18 +216,19 @@ func TestClient(t *testing.T) {
 			c, err := NewClient(
 				prefix+"://localhost:5780/stream.m3u8",
 				"33949E05FFFB5FF3E8AA16F8213A6251B4D9363804BA53233C4DA9A46D6F2739",
-				func(*gortsplib.TrackH264, *gortsplib.TrackAAC) error {
+				func(*gortsplib.TrackH264, *gortsplib.TrackMPEG4Audio) error {
 					return nil
 				},
 				func(pts time.Duration, nalus [][]byte) {
+					require.Equal(t, 2*time.Second, pts)
 					require.Equal(t, [][]byte{
 						{7, 1, 2, 3},
 						{8},
-						{0x05},
+						{5},
 					}, nalus)
 					close(packetRecv)
 				},
-				func(pts time.Duration, aus [][]byte) {
+				func(pts time.Duration, au []byte) {
 				},
 				testLogger{},
 			)

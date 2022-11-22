@@ -46,8 +46,8 @@ type pathManager struct {
 	chPathSourceReady    chan *path
 	chPathSourceNotReady chan *path
 	chDescribe           chan pathDescribeReq
-	chReaderSetupPlay    chan pathReaderSetupPlayReq
-	chPublisherAnnounce  chan pathPublisherAnnounceReq
+	chReaderAdd          chan pathReaderAddReq
+	chPublisherAdd       chan pathPublisherAddReq
 	chHLSServerSet       chan pathManagerHLSServer
 	chAPIPathsList       chan pathAPIPathsListReq
 }
@@ -84,8 +84,8 @@ func newPathManager(
 		chPathSourceReady:    make(chan *path),
 		chPathSourceNotReady: make(chan *path),
 		chDescribe:           make(chan pathDescribeReq),
-		chReaderSetupPlay:    make(chan pathReaderSetupPlayReq),
-		chPublisherAnnounce:  make(chan pathPublisherAnnounceReq),
+		chReaderAdd:          make(chan pathReaderAddReq),
+		chPublisherAdd:       make(chan pathPublisherAddReq),
 		chHLSServerSet:       make(chan pathManagerHLSServer),
 		chAPIPathsList:       make(chan pathAPIPathsListReq),
 	}
@@ -203,7 +203,7 @@ outer:
 
 			req.res <- pathDescribeRes{path: pm.paths[req.pathName]}
 
-		case req := <-pm.chReaderSetupPlay:
+		case req := <-pm.chReaderAdd:
 			pathConfName, pathConf, pathMatches, err := pm.findPathConf(req.pathName)
 			if err != nil {
 				req.res <- pathReaderSetupPlayRes{err: err}
@@ -228,7 +228,7 @@ outer:
 
 			req.res <- pathReaderSetupPlayRes{path: pm.paths[req.pathName]}
 
-		case req := <-pm.chPublisherAnnounce:
+		case req := <-pm.chPublisherAdd:
 			pathConfName, pathConf, pathMatches, err := pm.findPathConf(req.pathName)
 			if err != nil {
 				req.res <- pathPublisherAnnounceRes{err: err}
@@ -372,22 +372,20 @@ func (pm *pathManager) describe(req pathDescribeReq) pathDescribeRes {
 }
 
 // publisherAnnounce is called by a publisher.
-func (pm *pathManager) publisherAnnounce(req pathPublisherAnnounceReq) pathPublisherAnnounceRes {
+func (pm *pathManager) publisherAdd(req pathPublisherAddReq) pathPublisherAnnounceRes {
 	req.res = make(chan pathPublisherAnnounceRes)
 	select {
-	case pm.chPublisherAnnounce <- req:
-
+	case pm.chPublisherAdd <- req:
 		pm.sessionLock.Lock()
 		pm.session[req.pathName] = SESSION_PATH + uuid.New().String()
 		pm.sessionLock.Unlock()
-
 
 		res := <-req.res
 		if res.err != nil {
 			return res
 		}
 
-		return res.path.publisherAnnounce(req)
+		return res.path.publisherAdd(req)
 
 	case <-pm.ctx.Done():
 		return pathPublisherAnnounceRes{err: fmt.Errorf("terminated")}
@@ -395,16 +393,16 @@ func (pm *pathManager) publisherAnnounce(req pathPublisherAnnounceReq) pathPubli
 }
 
 // readerSetupPlay is called by a reader.
-func (pm *pathManager) readerSetupPlay(req pathReaderSetupPlayReq) pathReaderSetupPlayRes {
+func (pm *pathManager) readerAdd(req pathReaderAddReq) pathReaderSetupPlayRes {
 	req.res = make(chan pathReaderSetupPlayRes)
 	select {
-	case pm.chReaderSetupPlay <- req:
+	case pm.chReaderAdd <- req:
 		res := <-req.res
 		if res.err != nil {
 			return res
 		}
 
-		return res.path.readerSetupPlay(req)
+		return res.path.readerAdd(req)
 
 	case <-pm.ctx.Done():
 		return pathReaderSetupPlayRes{err: fmt.Errorf("terminated")}
@@ -424,8 +422,11 @@ func (pm *pathManager) hlsServerSet(s pathManagerHLSServer) {
 }
 
 // apiPathsList is called by api.
-func (pm *pathManager) apiPathsList(req pathAPIPathsListReq) pathAPIPathsListRes {
-	req.res = make(chan pathAPIPathsListRes)
+func (pm *pathManager) apiPathsList() pathAPIPathsListRes {
+	req := pathAPIPathsListReq{
+		res: make(chan pathAPIPathsListRes),
+	}
+
 	select {
 	case pm.chAPIPathsList <- req:
 		res := <-req.res

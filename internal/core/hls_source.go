@@ -5,9 +5,6 @@ import (
 	"time"
 
 	"github.com/aler9/gortsplib"
-	"github.com/aler9/gortsplib/pkg/h264"
-	"github.com/aler9/gortsplib/pkg/rtpaac"
-	"github.com/aler9/gortsplib/pkg/rtph264"
 
 	"github.com/aler9/rtsp-simple-server/internal/hls"
 	"github.com/aler9/rtsp-simple-server/internal/logger"
@@ -46,8 +43,6 @@ func (s *hlsSource) run(ctx context.Context) error {
 	var stream *stream
 	var videoTrackID int
 	var audioTrackID int
-	var videoEnc *rtph264.Encoder
-	var audioEnc *rtpaac.Encoder
 
 	defer func() {
 		if stream != nil {
@@ -55,86 +50,52 @@ func (s *hlsSource) run(ctx context.Context) error {
 		}
 	}()
 
-	onTracks := func(videoTrack *gortsplib.TrackH264, audioTrack *gortsplib.TrackAAC) error {
+	onTracks := func(videoTrack *gortsplib.TrackH264, audioTrack *gortsplib.TrackMPEG4Audio) error {
 		var tracks gortsplib.Tracks
 
 		if videoTrack != nil {
 			videoTrackID = len(tracks)
-			videoEnc = &rtph264.Encoder{PayloadType: 96}
-			videoEnc.Init()
 			tracks = append(tracks, videoTrack)
 		}
 
 		if audioTrack != nil {
 			audioTrackID = len(tracks)
-			audioEnc = &rtpaac.Encoder{
-				PayloadType:      96,
-				SampleRate:       audioTrack.ClockRate(),
-				SizeLength:       13,
-				IndexLength:      3,
-				IndexDeltaLength: 3,
-			}
-			audioEnc.Init()
 			tracks = append(tracks, audioTrack)
 		}
 
-		res := s.parent.sourceStaticImplSetReady(pathSourceStaticSetReadyReq{tracks: tracks})
+		res := s.parent.sourceStaticImplSetReady(pathSourceStaticSetReadyReq{
+			tracks:             tracks,
+			generateRTPPackets: true,
+		})
 		if res.err != nil {
 			return res.err
 		}
 
-		s.Log(logger.Info, "ready")
+		s.Log(logger.Info, "ready: %s", sourceTrackInfo(tracks))
 		stream = res.stream
 
 		return nil
 	}
 
 	onVideoData := func(pts time.Duration, nalus [][]byte) {
-		if stream == nil {
-			return
-		}
-
-		pkts, err := videoEnc.Encode(nalus, pts)
+		err := stream.writeData(&dataH264{
+			trackID: videoTrackID,
+			pts:     pts,
+			nalus:   nalus,
+		})
 		if err != nil {
-			return
-		}
-
-		lastPkt := len(pkts) - 1
-		for i, pkt := range pkts {
-			if i != lastPkt {
-				stream.writeData(&data{
-					trackID:      videoTrackID,
-					rtp:          pkt,
-					ptsEqualsDTS: false,
-				})
-			} else {
-				stream.writeData(&data{
-					trackID:      videoTrackID,
-					rtp:          pkt,
-					ptsEqualsDTS: h264.IDRPresent(nalus),
-					h264NALUs:    nalus,
-					h264PTS:      pts,
-				})
-			}
+			s.Log(logger.Warn, "%v", err)
 		}
 	}
 
-	onAudioData := func(pts time.Duration, aus [][]byte) {
-		if stream == nil {
-			return
-		}
-
-		pkts, err := audioEnc.Encode(aus, pts)
+	onAudioData := func(pts time.Duration, au []byte) {
+		err := stream.writeData(&dataMPEG4Audio{
+			trackID: audioTrackID,
+			pts:     pts,
+			aus:     [][]byte{au},
+		})
 		if err != nil {
-			return
-		}
-
-		for _, pkt := range pkts {
-			stream.writeData(&data{
-				trackID:      audioTrackID,
-				rtp:          pkt,
-				ptsEqualsDTS: true,
-			})
+			s.Log(logger.Warn, "%v", err)
 		}
 	}
 

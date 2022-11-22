@@ -10,6 +10,7 @@ import (
 	"github.com/aler9/gortsplib/pkg/auth"
 	"github.com/aler9/gortsplib/pkg/base"
 	"github.com/aler9/gortsplib/pkg/headers"
+	"github.com/google/uuid"
 
 	"github.com/aler9/rtsp-simple-server/internal/conf"
 	"github.com/aler9/rtsp-simple-server/internal/externalcmd"
@@ -36,6 +37,8 @@ type rtspConn struct {
 	conn                      *gortsplib.ServerConn
 	parent                    rtspConnParent
 
+	uuid          uuid.UUID
+	created       time.Time
 	onConnectCmd  *externalcmd.Cmd
 	authUser      string
 	authPass      string
@@ -66,6 +69,8 @@ func newRTSPConn(
 		pathManager:               pathManager,
 		conn:                      conn,
 		parent:                    parent,
+		uuid:                      uuid.New(),
+		created:                   time.Now(),
 	}
 
 	c.log(logger.Info, "opened")
@@ -98,6 +103,10 @@ func (c *rtspConn) Conn() *gortsplib.ServerConn {
 	return c.conn
 }
 
+func (c *rtspConn) remoteAddr() net.Addr {
+	return c.conn.NetConn().RemoteAddr()
+}
+
 func (c *rtspConn) ip() net.IP {
 	return c.conn.NetConn().RemoteAddr().(*net.TCPAddr).IP
 }
@@ -107,7 +116,7 @@ func (c *rtspConn) authenticate(
 	pathIPs []fmt.Stringer,
 	pathUser conf.Credential,
 	pathPass conf.Credential,
-	action string,
+	isPublishing bool,
 	req *base.Request,
 	query string,
 ) error {
@@ -128,7 +137,7 @@ func (c *rtspConn) authenticate(
 			username,
 			password,
 			pathName,
-			action,
+			isPublishing,
 			query)
 		if err != nil {
 			c.authFailures++
@@ -251,7 +260,7 @@ func (c *rtspConn) onDescribe(ctx *gortsplib.ServerHandlerOnDescribeCtx,
 			pathUser conf.Credential,
 			pathPass conf.Credential,
 		) error {
-			return c.authenticate(ctx.Path, pathIPs, pathUser, pathPass, "read", ctx.Request, ctx.Query)
+			return c.authenticate(ctx.Path, pathIPs, pathUser, pathPass, false, ctx.Request, ctx.Query)
 		},
 	})
 

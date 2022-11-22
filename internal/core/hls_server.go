@@ -12,11 +12,11 @@ import (
 	gopath "path"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/aler9/rtsp-simple-server/internal/conf"
-	"github.com/aler9/rtsp-simple-server/internal/hls"
 	"github.com/aler9/rtsp-simple-server/internal/logger"
 )
 
@@ -27,7 +27,9 @@ func (nilWriter) Write(p []byte) (int, error) {
 }
 
 type hlsServerAPIMuxersListItem struct {
-	LastRequest string `json:"lastRequest"`
+	Created     time.Time `json:"created"`
+	LastRequest time.Time `json:"lastRequest"`
+	BytesSent   uint64    `json:"bytesSent"`
 }
 
 type hlsServerAPIMuxersListData struct {
@@ -247,6 +249,7 @@ outer:
 	s.ctxCancel()
 
 	hs.Shutdown(context.Background())
+	s.ln.Close() // in case Shutdown() is called before Serve()
 
 	s.pathManager.hlsServerSet(nil)
 
@@ -309,19 +312,17 @@ func (s *hlsServer) onRequest(ctx *gin.Context) {
 
 	dir = strings.TrimSuffix(dir, "/")
 
-	cres := make(chan func() *hls.MuxerFileResponse)
 	hreq := &hlsMuxerRequest{
 		dir:  dir,
 		file: fname,
 		ctx:  ctx,
-		res:  cres,
+		res:  make(chan hlsMuxerResponse),
 	}
 
 	select {
 	case s.request <- hreq:
-		cb := <-cres
-
-		res := cb()
+		res1 := <-hreq.res
+		res := res1.cb()
 
 		for k, v := range res.Header {
 			ctx.Writer.Header().Set(k, v)
@@ -330,7 +331,8 @@ func (s *hlsServer) onRequest(ctx *gin.Context) {
 		ctx.Writer.WriteHeader(res.Status)
 
 		if res.Body != nil {
-			io.Copy(ctx.Writer, res.Body)
+			n, _ := io.Copy(ctx.Writer, res.Body)
+			res1.muxer.addSentBytes(uint64(n))
 		}
 
 	case <-s.ctx.Done():
@@ -396,8 +398,11 @@ func (s *hlsServer) pathSourceNotReady(pa *path) {
 }
 
 // apiHLSMuxersList is called by api.
-func (s *hlsServer) apiHLSMuxersList(req hlsServerAPIMuxersListReq) hlsServerAPIMuxersListRes {
-	req.res = make(chan hlsServerAPIMuxersListRes)
+func (s *hlsServer) apiHLSMuxersList() hlsServerAPIMuxersListRes {
+	req := hlsServerAPIMuxersListReq{
+		res: make(chan hlsServerAPIMuxersListRes),
+	}
+
 	select {
 	case s.chAPIMuxerList <- req:
 		res := <-req.res

@@ -1,10 +1,10 @@
+// Package conf contains the struct that holds the configuration of the software.
 package conf
 
 import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"reflect"
 	"strings"
@@ -46,7 +46,7 @@ func loadFromFile(fpath string, conf *Conf) (bool, error) {
 		}
 	}
 
-	byts, err := ioutil.ReadFile(fpath)
+	byts, err := os.ReadFile(fpath)
 	if err != nil {
 		return true, err
 	}
@@ -200,8 +200,12 @@ type Conf struct {
 	AuthMethods       AuthMethods `json:"authMethods"`
 
 	// RTMP
-	RTMPDisable bool   `json:"rtmpDisable"`
-	RTMPAddress string `json:"rtmpAddress"`
+	RTMPDisable    bool       `json:"rtmpDisable"`
+	RTMPAddress    string     `json:"rtmpAddress"`
+	RTMPEncryption Encryption `json:"rtmpEncryption"`
+	RTMPSAddress   string     `json:"rtmpsAddress"`
+	RTMPServerKey  string     `json:"rtmpServerKey"`
+	RTMPServerCert string     `json:"rtmpServerCert"`
 
 	// HLS
 	HLSDisable         bool           `json:"hlsDisable"`
@@ -352,6 +356,10 @@ func (conf *Conf) CheckAndFillMissing() error {
 
 	if conf.RTMPAddress == "" {
 		conf.RTMPAddress = ":1935"
+	}
+
+	if conf.RTMPSAddress == "" {
+		conf.RTMPSAddress = ":1936"
 	}
 
 	if conf.HLSAddress == "" {

@@ -20,7 +20,7 @@ func interfaceIsEmpty(i interface{}) bool {
 }
 
 func fillStruct(dest interface{}, source interface{}) {
-	rvsource := reflect.ValueOf(source)
+	rvsource := reflect.ValueOf(source).Elem()
 	rvdest := reflect.ValueOf(dest)
 	nf := rvsource.NumField()
 	for i := 0; i < nf; i++ {
@@ -41,60 +41,30 @@ func cloneStruct(dest interface{}, source interface{}) {
 	_ = json.Unmarshal(enc, dest)
 }
 
-func loadConfData(ctx *gin.Context) (interface{}, error) {
-	var in struct {
-		// general
-		LogLevel                  *conf.LogLevel        `json:"logLevel"`
-		LogDestinations           *conf.LogDestinations `json:"logDestinations"`
-		LogFile                   *string               `json:"logFile"`
-		ReadTimeout               *conf.StringDuration  `json:"readTimeout"`
-		WriteTimeout              *conf.StringDuration  `json:"writeTimeout"`
-		ReadBufferCount           *int                  `json:"readBufferCount"`
-		ExternalAuthenticationURL *string               `json:"externalAuthenticationURL"`
-		API                       *bool                 `json:"api"`
-		APIAddress                *string               `json:"apiAddress"`
-		Metrics                   *bool                 `json:"metrics"`
-		MetricsAddress            *string               `json:"metricsAddress"`
-		PPROF                     *bool                 `json:"pprof"`
-		PPROFAddress              *string               `json:"pprofAddress"`
-		RunOnConnect              *string               `json:"runOnConnect"`
-		RunOnConnectRestart       *bool                 `json:"runOnConnectRestart"`
+func generateStructWithOptionalFields(model interface{}) interface{} {
+	var fields []reflect.StructField
 
-		// RTSP
-		RTSPDisable       *bool             `json:"rtspDisable"`
-		Protocols         *conf.Protocols   `json:"protocols"`
-		Encryption        *conf.Encryption  `json:"encryption"`
-		RTSPAddress       *string           `json:"rtspAddress"`
-		RTSPSAddress      *string           `json:"rtspsAddress"`
-		RTPAddress        *string           `json:"rtpAddress"`
-		RTCPAddress       *string           `json:"rtcpAddress"`
-		MulticastIPRange  *string           `json:"multicastIPRange"`
-		MulticastRTPPort  *int              `json:"multicastRTPPort"`
-		MulticastRTCPPort *int              `json:"multicastRTCPPort"`
-		ServerKey         *string           `json:"serverKey"`
-		ServerCert        *string           `json:"serverCert"`
-		AuthMethods       *conf.AuthMethods `json:"authMethods"`
+	rt := reflect.TypeOf(model)
+	nf := rt.NumField()
+	for i := 0; i < nf; i++ {
+		f := rt.Field(i)
+		j := f.Tag.Get("json")
 
-		// RTMP
-		RTMPDisable *bool   `json:"rtmpDisable"`
-		RTMPAddress *string `json:"rtmpAddress"`
-
-		// HLS
-		HLSDisable         *bool                `json:"hlsDisable"`
-		HLSAddress         *string              `json:"hlsAddress"`
-		HLSAlwaysRemux     *bool                `json:"hlsAlwaysRemux"`
-		HLSVariant         *conf.HLSVariant     `json:"hlsVariant"`
-		HLSSegmentCount    *int                 `json:"hlsSegmentCount"`
-		HLSSegmentDuration *conf.StringDuration `json:"hlsSegmentDuration"`
-		HLSPartDuration    *conf.StringDuration `json:"hlsPartDuration"`
-		HLSSegmentMaxSize  *conf.StringSize     `json:"hlsSegmentMaxSize"`
-		HLSAllowOrigin     *string              `json:"hlsAllowOrigin"`
-		HLSEncryption      *bool                `json:"hlsEncryption"`
-		HLSServerKey       *string              `json:"hlsServerKey"`
-		HLSServerCert      *string              `json:"hlsServerCert"`
-		HLSTrustedProxies  *conf.IPsOrCIDRs     `json:"hlsTrustedProxies"`
+		if j != "-" && j != "paths" {
+			fields = append(fields, reflect.StructField{
+				Name: f.Name,
+				Type: reflect.PtrTo(f.Type),
+				Tag:  f.Tag,
+			})
+		}
 	}
-	err := json.NewDecoder(ctx.Request.Body).Decode(&in)
+
+	return reflect.New(reflect.StructOf(fields)).Interface()
+}
+
+func loadConfData(ctx *gin.Context) (interface{}, error) {
+	in := generateStructWithOptionalFields(conf.Conf{})
+	err := json.NewDecoder(ctx.Request.Body).Decode(in)
 	if err != nil {
 		return nil, err
 	}
@@ -103,40 +73,8 @@ func loadConfData(ctx *gin.Context) (interface{}, error) {
 }
 
 func loadConfPathData(ctx *gin.Context) (interface{}, error) {
-	var in struct {
-		// source
-		Source                     *string              `json:"source"`
-		SourceProtocol             *conf.SourceProtocol `json:"sourceProtocol"`
-		SourceAnyPortEnable        *bool                `json:"sourceAnyPortEnable"`
-		SourceFingerprint          *string              `json:"sourceFingerprint"`
-		SourceOnDemand             *bool                `json:"sourceOnDemand"`
-		SourceOnDemandStartTimeout *conf.StringDuration `json:"sourceOnDemandStartTimeout"`
-		SourceOnDemandCloseAfter   *conf.StringDuration `json:"sourceOnDemandCloseAfter"`
-		SourceRedirect             *string              `json:"sourceRedirect"`
-		DisablePublisherOverride   *bool                `json:"disablePublisherOverride"`
-		Fallback                   *string              `json:"fallback"`
-
-		// authentication
-		PublishUser *conf.Credential `json:"publishUser"`
-		PublishPass *conf.Credential `json:"publishPass"`
-		PublishIPs  *conf.IPsOrCIDRs `json:"publishIPs"`
-		ReadUser    *conf.Credential `json:"readUser"`
-		ReadPass    *conf.Credential `json:"readPass"`
-		ReadIPs     *conf.IPsOrCIDRs `json:"readIPs"`
-
-		// external commands
-		RunOnInit               *string              `json:"runOnInit"`
-		RunOnInitRestart        *bool                `json:"runOnInitRestart"`
-		RunOnDemand             *string              `json:"runOnDemand"`
-		RunOnDemandRestart      *bool                `json:"runOnDemandRestart"`
-		RunOnDemandStartTimeout *conf.StringDuration `json:"runOnDemandStartTimeout"`
-		RunOnDemandCloseAfter   *conf.StringDuration `json:"runOnDemandCloseAfter"`
-		RunOnReady              *string              `json:"runOnReady"`
-		RunOnReadyRestart       *bool                `json:"runOnReadyRestart"`
-		RunOnRead               *string              `json:"runOnRead"`
-		RunOnReadRestart        *bool                `json:"runOnReadRestart"`
-	}
-	err := json.NewDecoder(ctx.Request.Body).Decode(&in)
+	in := generateStructWithOptionalFields(conf.PathConf{})
+	err := json.NewDecoder(ctx.Request.Body).Decode(in)
 	if err != nil {
 		return nil, err
 	}
@@ -145,21 +83,22 @@ func loadConfPathData(ctx *gin.Context) (interface{}, error) {
 }
 
 type apiPathManager interface {
-	apiPathsList(req pathAPIPathsListReq) pathAPIPathsListRes
+	apiPathsList() pathAPIPathsListRes
 }
 
 type apiRTSPServer interface {
-	apiSessionsList(req rtspServerAPISessionsListReq) rtspServerAPISessionsListRes
-	apiSessionsKick(req rtspServerAPISessionsKickReq) rtspServerAPISessionsKickRes
+	apiConnsList() rtspServerAPIConnsListRes
+	apiSessionsList() rtspServerAPISessionsListRes
+	apiSessionsKick(string) rtspServerAPISessionsKickRes
 }
 
 type apiRTMPServer interface {
-	apiConnsList(req rtmpServerAPIConnsListReq) rtmpServerAPIConnsListRes
-	apiConnsKick(req rtmpServerAPIConnsKickReq) rtmpServerAPIConnsKickRes
+	apiConnsList() rtmpServerAPIConnsListRes
+	apiConnsKick(id string) rtmpServerAPIConnsKickRes
 }
 
 type apiHLSServer interface {
-	apiHLSMuxersList(req hlsServerAPIMuxersListReq) hlsServerAPIMuxersListRes
+	apiHLSMuxersList() hlsServerAPIMuxersListRes
 }
 
 type apiParent interface {
@@ -173,9 +112,11 @@ type api struct {
 	rtspServer  apiRTSPServer
 	rtspsServer apiRTSPServer
 	rtmpServer  apiRTMPServer
+	rtmpsServer apiRTMPServer
 	hlsServer   apiHLSServer
 	parent      apiParent
 
+	ln    net.Listener
 	mutex sync.Mutex
 	s     *http.Server
 }
@@ -187,6 +128,7 @@ func newAPI(
 	rtspServer apiRTSPServer,
 	rtspsServer apiRTSPServer,
 	rtmpServer apiRTMPServer,
+	rtmpsServer apiRTMPServer,
 	hlsServer apiHLSServer,
 	parent apiParent,
 ) (*api, error) {
@@ -201,8 +143,10 @@ func newAPI(
 		rtspServer:  rtspServer,
 		rtspsServer: rtspsServer,
 		rtmpServer:  rtmpServer,
+		rtmpsServer: rtmpsServer,
 		hlsServer:   hlsServer,
 		parent:      parent,
+		ln:          ln,
 	}
 
 	router := gin.New()
@@ -219,11 +163,13 @@ func newAPI(
 	group.GET("/v1/paths/list", a.onPathsList)
 
 	if !interfaceIsEmpty(a.rtspServer) {
+		group.GET("/v1/rtspconns/list", a.onRTSPConnsList)
 		group.GET("/v1/rtspsessions/list", a.onRTSPSessionsList)
 		group.POST("/v1/rtspsessions/kick/:id", a.onRTSPSessionsKick)
 	}
 
 	if !interfaceIsEmpty(a.rtspsServer) {
+		group.GET("/v1/rtspsconns/list", a.onRTSPSConnsList)
 		group.GET("/v1/rtspssessions/list", a.onRTSPSSessionsList)
 		group.POST("/v1/rtspssessions/kick/:id", a.onRTSPSSessionsKick)
 	}
@@ -231,6 +177,11 @@ func newAPI(
 	if !interfaceIsEmpty(a.rtmpServer) {
 		group.GET("/v1/rtmpconns/list", a.onRTMPConnsList)
 		group.POST("/v1/rtmpconns/kick/:id", a.onRTMPConnsKick)
+	}
+
+	if !interfaceIsEmpty(a.rtmpsServer) {
+		group.GET("/v1/rtmpsconns/list", a.onRTMPSConnsList)
+		group.POST("/v1/rtmpsconns/kick/:id", a.onRTMPSConnsKick)
 	}
 
 	if !interfaceIsEmpty(a.hlsServer) {
@@ -249,6 +200,7 @@ func newAPI(
 func (a *api) close() {
 	a.log(logger.Info, "listener is closing")
 	a.s.Shutdown(context.Background())
+	a.ln.Close() // in case Shutdown() is called before Serve()
 }
 
 func (a *api) log(level logger.Level, format string, args ...interface{}) {
@@ -433,7 +385,17 @@ func (a *api) onConfigPathsDelete(ctx *gin.Context) {
 }
 
 func (a *api) onPathsList(ctx *gin.Context) {
-	res := a.pathManager.apiPathsList(pathAPIPathsListReq{})
+	res := a.pathManager.apiPathsList()
+	if res.err != nil {
+		ctx.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, res.data)
+}
+
+func (a *api) onRTSPConnsList(ctx *gin.Context) {
+	res := a.rtspServer.apiConnsList()
 	if res.err != nil {
 		ctx.AbortWithStatus(http.StatusInternalServerError)
 		return
@@ -443,7 +405,7 @@ func (a *api) onPathsList(ctx *gin.Context) {
 }
 
 func (a *api) onRTSPSessionsList(ctx *gin.Context) {
-	res := a.rtspServer.apiSessionsList(rtspServerAPISessionsListReq{})
+	res := a.rtspServer.apiSessionsList()
 	if res.err != nil {
 		ctx.AbortWithStatus(http.StatusInternalServerError)
 		return
@@ -455,7 +417,7 @@ func (a *api) onRTSPSessionsList(ctx *gin.Context) {
 func (a *api) onRTSPSessionsKick(ctx *gin.Context) {
 	id := ctx.Param("id")
 
-	res := a.rtspServer.apiSessionsKick(rtspServerAPISessionsKickReq{id: id})
+	res := a.rtspServer.apiSessionsKick(id)
 	if res.err != nil {
 		ctx.AbortWithStatus(http.StatusNotFound)
 		return
@@ -464,8 +426,18 @@ func (a *api) onRTSPSessionsKick(ctx *gin.Context) {
 	ctx.Status(http.StatusOK)
 }
 
+func (a *api) onRTSPSConnsList(ctx *gin.Context) {
+	res := a.rtspsServer.apiConnsList()
+	if res.err != nil {
+		ctx.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, res.data)
+}
+
 func (a *api) onRTSPSSessionsList(ctx *gin.Context) {
-	res := a.rtspsServer.apiSessionsList(rtspServerAPISessionsListReq{})
+	res := a.rtspsServer.apiSessionsList()
 	if res.err != nil {
 		ctx.AbortWithStatus(http.StatusInternalServerError)
 		return
@@ -477,7 +449,7 @@ func (a *api) onRTSPSSessionsList(ctx *gin.Context) {
 func (a *api) onRTSPSSessionsKick(ctx *gin.Context) {
 	id := ctx.Param("id")
 
-	res := a.rtspsServer.apiSessionsKick(rtspServerAPISessionsKickReq{id: id})
+	res := a.rtspsServer.apiSessionsKick(id)
 	if res.err != nil {
 		ctx.AbortWithStatus(http.StatusNotFound)
 		return
@@ -487,7 +459,7 @@ func (a *api) onRTSPSSessionsKick(ctx *gin.Context) {
 }
 
 func (a *api) onRTMPConnsList(ctx *gin.Context) {
-	res := a.rtmpServer.apiConnsList(rtmpServerAPIConnsListReq{})
+	res := a.rtmpServer.apiConnsList()
 	if res.err != nil {
 		ctx.AbortWithStatus(http.StatusInternalServerError)
 		return
@@ -499,7 +471,29 @@ func (a *api) onRTMPConnsList(ctx *gin.Context) {
 func (a *api) onRTMPConnsKick(ctx *gin.Context) {
 	id := ctx.Param("id")
 
-	res := a.rtmpServer.apiConnsKick(rtmpServerAPIConnsKickReq{id: id})
+	res := a.rtmpServer.apiConnsKick(id)
+	if res.err != nil {
+		ctx.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+
+	ctx.Status(http.StatusOK)
+}
+
+func (a *api) onRTMPSConnsList(ctx *gin.Context) {
+	res := a.rtmpsServer.apiConnsList()
+	if res.err != nil {
+		ctx.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, res.data)
+}
+
+func (a *api) onRTMPSConnsKick(ctx *gin.Context) {
+	id := ctx.Param("id")
+
+	res := a.rtmpsServer.apiConnsKick(id)
 	if res.err != nil {
 		ctx.AbortWithStatus(http.StatusNotFound)
 		return
@@ -509,7 +503,7 @@ func (a *api) onRTMPConnsKick(ctx *gin.Context) {
 }
 
 func (a *api) onHLSMuxersList(ctx *gin.Context) {
-	res := a.hlsServer.apiHLSMuxersList(hlsServerAPIMuxersListReq{})
+	res := a.hlsServer.apiHLSMuxersList()
 	if res.err != nil {
 		ctx.AbortWithStatus(http.StatusInternalServerError)
 		return

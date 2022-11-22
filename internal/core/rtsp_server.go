@@ -2,10 +2,8 @@ package core
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,9 +18,28 @@ import (
 	"github.com/aler9/rtsp-simple-server/internal/logger"
 )
 
+type rtspServerAPIConnsListItem struct {
+	Created       time.Time `json:"created"`
+	RemoteAddr    string    `json:"remoteAddr"`
+	BytesReceived uint64    `json:"bytesReceived"`
+	BytesSent     uint64    `json:"bytesSent"`
+}
+
+type rtspServerAPIConnsListData struct {
+	Items map[string]rtspServerAPIConnsListItem `json:"items"`
+}
+
+type rtspServerAPIConnsListRes struct {
+	data *rtspServerAPIConnsListData
+	err  error
+}
+
 type rtspServerAPISessionsListItem struct {
-	RemoteAddr string `json:"remoteAddr"`
-	State      string `json:"state"`
+	Created       time.Time `json:"created"`
+	RemoteAddr    string    `json:"remoteAddr"`
+	State         string    `json:"state"`
+	BytesReceived uint64    `json:"bytesReceived"`
+	BytesSent     uint64    `json:"bytesSent"`
 }
 
 type rtspServerAPISessionsListData struct {
@@ -34,18 +51,28 @@ type rtspServerAPISessionsListRes struct {
 	err  error
 }
 
-type rtspServerAPISessionsListReq struct{}
-
 type rtspServerAPISessionsKickRes struct {
 	err error
 }
 
-type rtspServerAPISessionsKickReq struct {
-	id string
-}
-
 type rtspServerParent interface {
 	Log(logger.Level, string, ...interface{})
+}
+
+func printAddresses(srv *gortsplib.Server) string {
+	var ret []string
+
+	ret = append(ret, fmt.Sprintf("%s (TCP)", srv.RTSPAddress))
+
+	if srv.UDPRTPAddress != "" {
+		ret = append(ret, fmt.Sprintf("%s (UDP/RTP)", srv.UDPRTPAddress))
+	}
+
+	if srv.UDPRTCPAddress != "" {
+		ret = append(ret, fmt.Sprintf("%s (UDP/RTCP)", srv.UDPRTCPAddress))
+	}
+
+	return strings.Join(ret, ", ")
 }
 
 type rtspServer struct {
@@ -151,19 +178,7 @@ func newRTSPServer(
 		return nil, err
 	}
 
-	var temp []string
-
-	temp = append(temp, fmt.Sprintf("%s (TCP)", address))
-
-	if s.srv.UDPRTPAddress != "" {
-		temp = append(temp, fmt.Sprintf("%s (UDP/RTP)", s.srv.UDPRTPAddress))
-	}
-
-	if s.srv.UDPRTCPAddress != "" {
-		temp = append(temp, fmt.Sprintf("%s (UDP/RTCP)", s.srv.UDPRTCPAddress))
-	}
-
-	s.log(logger.Info, "listener opened on "+strings.Join(temp, ", "))
+	s.log(logger.Info, "listener opened on %s", printAddresses(s.srv))
 
 	if s.metrics != nil {
 		if !isTLS {
@@ -226,34 +241,6 @@ outer:
 	}
 }
 
-func (s *rtspServer) newSessionID() (string, error) {
-	for {
-		b := make([]byte, 4)
-		_, err := rand.Read(b)
-		if err != nil {
-			return "", err
-		}
-
-		u := uint32(b[3])<<24 | uint32(b[2])<<16 | uint32(b[1])<<8 | uint32(b[0])
-		u %= 899999999
-		u += 100000000
-
-		id := strconv.FormatUint(uint64(u), 10)
-
-		alreadyPresent := func() bool {
-			for _, s := range s.sessions {
-				if s.ID() == id {
-					return true
-				}
-			}
-			return false
-		}()
-		if !alreadyPresent {
-			return id, nil
-		}
-	}
-}
-
 // OnConnOpen implements gortsplib.ServerHandlerOnConnOpen.
 func (s *rtspServer) OnConnOpen(ctx *gortsplib.ServerHandlerOnConnOpenCtx) {
 	c := newRTSPConn(
@@ -267,10 +254,11 @@ func (s *rtspServer) OnConnOpen(ctx *gortsplib.ServerHandlerOnConnOpenCtx) {
 		s.pathManager,
 		ctx.Conn,
 		s)
-
 	s.mutex.Lock()
 	s.conns[ctx.Conn] = c
 	s.mutex.Unlock()
+
+	ctx.Conn.SetUserData(c)
 }
 
 // OnConnClose implements gortsplib.ServerHandlerOnConnClose.
@@ -279,46 +267,35 @@ func (s *rtspServer) OnConnClose(ctx *gortsplib.ServerHandlerOnConnCloseCtx) {
 	c := s.conns[ctx.Conn]
 	delete(s.conns, ctx.Conn)
 	s.mutex.Unlock()
-
 	c.onClose(ctx.Error)
 }
 
 // OnRequest implements gortsplib.ServerHandlerOnRequest.
 func (s *rtspServer) OnRequest(sc *gortsplib.ServerConn, req *base.Request) {
-	s.mutex.Lock()
-	c := s.conns[sc]
-	s.mutex.Unlock()
-
+	c := sc.UserData().(*rtspConn)
 	c.onRequest(req)
 }
 
 // OnResponse implements gortsplib.ServerHandlerOnResponse.
 func (s *rtspServer) OnResponse(sc *gortsplib.ServerConn, res *base.Response) {
-	s.mutex.Lock()
-	c := s.conns[sc]
-	s.mutex.Unlock()
-
+	c := sc.UserData().(*rtspConn)
 	c.OnResponse(res)
 }
 
 // OnSessionOpen implements gortsplib.ServerHandlerOnSessionOpen.
 func (s *rtspServer) OnSessionOpen(ctx *gortsplib.ServerHandlerOnSessionOpenCtx) {
-	s.mutex.Lock()
-
-	id, _ := s.newSessionID()
-
 	se := newRTSPSession(
 		s.isTLS,
 		s.protocols,
-		id,
 		ctx.Session,
 		ctx.Conn,
 		s.externalCmdPool,
 		s.pathManager,
 		s)
-
+	s.mutex.Lock()
 	s.sessions[ctx.Session] = se
 	s.mutex.Unlock()
+	ctx.Session.SetUserData(se)
 }
 
 // OnSessionClose implements gortsplib.ServerHandlerOnSessionClose.
@@ -336,64 +313,83 @@ func (s *rtspServer) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCt
 // OnDescribe implements gortsplib.ServerHandlerOnDescribe.
 func (s *rtspServer) OnDescribe(ctx *gortsplib.ServerHandlerOnDescribeCtx,
 ) (*base.Response, *gortsplib.ServerStream, error) {
-	s.mutex.RLock()
-	c := s.conns[ctx.Conn]
-	s.mutex.RUnlock()
+	c := ctx.Conn.UserData().(*rtspConn)
 	return c.onDescribe(ctx)
 }
 
 // OnAnnounce implements gortsplib.ServerHandlerOnAnnounce.
 func (s *rtspServer) OnAnnounce(ctx *gortsplib.ServerHandlerOnAnnounceCtx) (*base.Response, error) {
-	s.mutex.RLock()
-	c := s.conns[ctx.Conn]
-	se := s.sessions[ctx.Session]
-	s.mutex.RUnlock()
+	c := ctx.Conn.UserData().(*rtspConn)
+	se := ctx.Session.UserData().(*rtspSession)
 	return se.onAnnounce(c, ctx)
 }
 
 // OnSetup implements gortsplib.ServerHandlerOnSetup.
 func (s *rtspServer) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (*base.Response, *gortsplib.ServerStream, error) {
-	s.mutex.RLock()
-	c := s.conns[ctx.Conn]
-	se := s.sessions[ctx.Session]
-	s.mutex.RUnlock()
+	c := ctx.Conn.UserData().(*rtspConn)
+	se := ctx.Session.UserData().(*rtspSession)
 	return se.onSetup(c, ctx)
 }
 
 // OnPlay implements gortsplib.ServerHandlerOnPlay.
 func (s *rtspServer) OnPlay(ctx *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, error) {
-	s.mutex.RLock()
-	se := s.sessions[ctx.Session]
-	s.mutex.RUnlock()
+	se := ctx.Session.UserData().(*rtspSession)
 	return se.onPlay(ctx)
 }
 
 // OnRecord implements gortsplib.ServerHandlerOnRecord.
 func (s *rtspServer) OnRecord(ctx *gortsplib.ServerHandlerOnRecordCtx) (*base.Response, error) {
-	s.mutex.RLock()
-	se := s.sessions[ctx.Session]
-	s.mutex.RUnlock()
+	se := ctx.Session.UserData().(*rtspSession)
 	return se.onRecord(ctx)
 }
 
 // OnPause implements gortsplib.ServerHandlerOnPause.
 func (s *rtspServer) OnPause(ctx *gortsplib.ServerHandlerOnPauseCtx) (*base.Response, error) {
-	s.mutex.RLock()
-	se := s.sessions[ctx.Session]
-	s.mutex.RUnlock()
+	se := ctx.Session.UserData().(*rtspSession)
 	return se.onPause(ctx)
 }
 
-// OnPacketRTP implements gortsplib.ServerHandlerOnPacket.
+// OnPacketRTP implements gortsplib.ServerHandlerOnPacketRTP.
 func (s *rtspServer) OnPacketRTP(ctx *gortsplib.ServerHandlerOnPacketRTPCtx) {
-	s.mutex.RLock()
-	se := s.sessions[ctx.Session]
-	s.mutex.RUnlock()
+	se := ctx.Session.UserData().(*rtspSession)
 	se.onPacketRTP(ctx)
 }
 
+// OnDecodeError implements gortsplib.ServerHandlerOnOnDecodeError.
+func (s *rtspServer) OnDecodeError(ctx *gortsplib.ServerHandlerOnDecodeErrorCtx) {
+	se := ctx.Session.UserData().(*rtspSession)
+	se.onDecodeError(ctx)
+}
+
+// apiConnsList is called by api and metrics.
+func (s *rtspServer) apiConnsList() rtspServerAPIConnsListRes {
+	select {
+	case <-s.ctx.Done():
+		return rtspServerAPIConnsListRes{err: fmt.Errorf("terminated")}
+	default:
+	}
+
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	data := &rtspServerAPIConnsListData{
+		Items: make(map[string]rtspServerAPIConnsListItem),
+	}
+
+	for _, c := range s.conns {
+		data.Items[c.uuid.String()] = rtspServerAPIConnsListItem{
+			Created:       c.created,
+			RemoteAddr:    c.remoteAddr().String(),
+			BytesReceived: c.conn.BytesReceived(),
+			BytesSent:     c.conn.BytesSent(),
+		}
+	}
+
+	return rtspServerAPIConnsListRes{data: data}
+}
+
 // apiSessionsList is called by api and metrics.
-func (s *rtspServer) apiSessionsList(req rtspServerAPISessionsListReq) rtspServerAPISessionsListRes {
+func (s *rtspServer) apiSessionsList() rtspServerAPISessionsListRes {
 	select {
 	case <-s.ctx.Done():
 		return rtspServerAPISessionsListRes{err: fmt.Errorf("terminated")}
@@ -408,8 +404,9 @@ func (s *rtspServer) apiSessionsList(req rtspServerAPISessionsListReq) rtspServe
 	}
 
 	for _, s := range s.sessions {
-		data.Items[s.ID()] = rtspServerAPISessionsListItem{
-			RemoteAddr: s.RemoteAddr().String(),
+		data.Items[s.uuid.String()] = rtspServerAPISessionsListItem{
+			Created:    s.created,
+			RemoteAddr: s.remoteAddr().String(),
 			State: func() string {
 				switch s.safeState() {
 				case gortsplib.ServerSessionStatePrePlay,
@@ -422,6 +419,8 @@ func (s *rtspServer) apiSessionsList(req rtspServerAPISessionsListReq) rtspServe
 				}
 				return "idle"
 			}(),
+			BytesReceived: s.session.BytesReceived(),
+			BytesSent:     s.session.BytesSent(),
 		}
 	}
 
@@ -429,7 +428,7 @@ func (s *rtspServer) apiSessionsList(req rtspServerAPISessionsListReq) rtspServe
 }
 
 // apiSessionsKick is called by api.
-func (s *rtspServer) apiSessionsKick(req rtspServerAPISessionsKickReq) rtspServerAPISessionsKickRes {
+func (s *rtspServer) apiSessionsKick(id string) rtspServerAPISessionsKickRes {
 	select {
 	case <-s.ctx.Done():
 		return rtspServerAPISessionsKickRes{err: fmt.Errorf("terminated")}
@@ -440,7 +439,7 @@ func (s *rtspServer) apiSessionsKick(req rtspServerAPISessionsKickReq) rtspServe
 	defer s.mutex.RUnlock()
 
 	for key, se := range s.sessions {
-		if se.ID() == req.id {
+		if se.uuid.String() == id {
 			se.close()
 			delete(s.sessions, key)
 			se.onClose(liberrors.ErrServerTerminated{})

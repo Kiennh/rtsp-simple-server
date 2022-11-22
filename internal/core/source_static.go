@@ -8,6 +8,7 @@ import (
 
 	"github.com/aler9/rtsp-simple-server/internal/conf"
 	"github.com/aler9/rtsp-simple-server/internal/logger"
+	"github.com/aler9/rtsp-simple-server/internal/rpicamera"
 )
 
 const (
@@ -28,14 +29,7 @@ type sourceStaticParent interface {
 
 // sourceStatic is a static source.
 type sourceStatic struct {
-	ur              string
-	protocol        conf.SourceProtocol
-	anyPortEnable   bool
-	fingerprint     string
-	readTimeout     conf.StringDuration
-	writeTimeout    conf.StringDuration
-	readBufferCount int
-	parent          sourceStaticParent
+	parent sourceStaticParent
 
 	ctx       context.Context
 	ctxCancel func()
@@ -48,53 +42,75 @@ type sourceStatic struct {
 }
 
 func newSourceStatic(
-	ur string,
-	protocol conf.SourceProtocol,
-	anyPortEnable bool,
-	fingerprint string,
+	conf *conf.PathConf,
 	readTimeout conf.StringDuration,
 	writeTimeout conf.StringDuration,
 	readBufferCount int,
 	parent sourceStaticParent,
 ) *sourceStatic {
 	s := &sourceStatic{
-		ur:                            ur,
-		protocol:                      protocol,
-		anyPortEnable:                 anyPortEnable,
-		fingerprint:                   fingerprint,
-		readTimeout:                   readTimeout,
-		writeTimeout:                  writeTimeout,
-		readBufferCount:               readBufferCount,
 		parent:                        parent,
 		chSourceStaticImplSetReady:    make(chan pathSourceStaticSetReadyReq),
 		chSourceStaticImplSetNotReady: make(chan pathSourceStaticSetNotReadyReq),
 	}
 
 	switch {
-	case strings.HasPrefix(s.ur, "rtsp://") ||
-		strings.HasPrefix(s.ur, "rtsps://"):
+	case strings.HasPrefix(conf.Source, "rtsp://") ||
+		strings.HasPrefix(conf.Source, "rtsps://"):
 		s.impl = newRTSPSource(
-			s.ur,
-			s.protocol,
-			s.anyPortEnable,
-			s.fingerprint,
-			s.readTimeout,
-			s.writeTimeout,
-			s.readBufferCount,
+			conf.Source,
+			conf.SourceProtocol,
+			conf.SourceAnyPortEnable,
+			conf.SourceFingerprint,
+			readTimeout,
+			writeTimeout,
+			readBufferCount,
 			s)
 
-	case strings.HasPrefix(s.ur, "rtmp://"):
+	case strings.HasPrefix(conf.Source, "rtmp://") ||
+		strings.HasPrefix(conf.Source, "rtmps://"):
 		s.impl = newRTMPSource(
-			s.ur,
-			s.readTimeout,
-			s.writeTimeout,
+			conf.Source,
+			conf.SourceFingerprint,
+			readTimeout,
+			writeTimeout,
 			s)
 
-	case strings.HasPrefix(s.ur, "http://") ||
-		strings.HasPrefix(s.ur, "https://"):
+	case strings.HasPrefix(conf.Source, "http://") ||
+		strings.HasPrefix(conf.Source, "https://"):
 		s.impl = newHLSSource(
-			s.ur,
-			s.fingerprint,
+			conf.Source,
+			conf.SourceFingerprint,
+			s)
+
+	case conf.Source == "rpiCamera":
+		s.impl = newRPICameraSource(
+			rpicamera.Params{
+				CameraID:   conf.RPICameraCamID,
+				Width:      conf.RPICameraWidth,
+				Height:     conf.RPICameraHeight,
+				HFlip:      conf.RPICameraHFlip,
+				VFlip:      conf.RPICameraVFlip,
+				Brightness: conf.RPICameraBrightness,
+				Contrast:   conf.RPICameraContrast,
+				Saturation: conf.RPICameraSaturation,
+				Sharpness:  conf.RPICameraSharpness,
+				Exposure:   conf.RPICameraExposure,
+				AWB:        conf.RPICameraAWB,
+				Denoise:    conf.RPICameraDenoise,
+				Shutter:    conf.RPICameraShutter,
+				Metering:   conf.RPICameraMetering,
+				Gain:       conf.RPICameraGain,
+				EV:         conf.RPICameraEV,
+				ROI:        conf.RPICameraROI,
+				TuningFile: conf.RPICameraTuningFile,
+				Mode:       conf.RPICameraMode,
+				FPS:        conf.RPICameraFPS,
+				IDRPeriod:  conf.RPICameraIDRPeriod,
+				Bitrate:    conf.RPICameraBitrate,
+				Profile:    conf.RPICameraProfile,
+				Level:      conf.RPICameraLevel,
+			},
 			s)
 	}
 

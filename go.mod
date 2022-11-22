@@ -1,14 +1,15 @@
 module github.com/aler9/rtsp-simple-server
 
-go 1.17
+go 1.18
 
 require (
 	code.cloudfoundry.org/bytefmt v0.0.0-20211005130812-5bb3c17173e5
-	github.com/abema/go-mp4 v0.7.2
-	github.com/aler9/gortsplib v0.0.0-20220724100730-2c8889602c59
+	github.com/abema/go-mp4 v0.8.0
+	github.com/aler9/gortsplib v0.0.0-20221115222755-87d5a512b129
 	github.com/asticode/go-astits v1.10.1-0.20220319093903-4abe66a9b757
 	github.com/fsnotify/fsnotify v1.4.9
 	github.com/gin-gonic/gin v1.8.1
+	github.com/google/uuid v1.1.2
 	github.com/gookit/color v1.4.2
 	github.com/grafov/m3u8 v0.11.1
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
@@ -31,7 +32,6 @@ require (
 	github.com/go-playground/universal-translator v0.18.0 // indirect
 	github.com/go-playground/validator/v10 v10.10.0 // indirect
 	github.com/goccy/go-json v0.9.7 // indirect
-	github.com/google/uuid v1.1.2 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/leodido/go-urn v1.2.1 // indirect
 	github.com/mattn/go-isatty v0.0.14 // indirect

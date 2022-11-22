@@ -49,6 +49,30 @@ type PathConf struct {
 	SourceRedirect             string         `json:"sourceRedirect"`
 	DisablePublisherOverride   bool           `json:"disablePublisherOverride"`
 	Fallback                   string         `json:"fallback"`
+	RPICameraCamID             int            `json:"rpiCameraCamID"`
+	RPICameraWidth             int            `json:"rpiCameraWidth"`
+	RPICameraHeight            int            `json:"rpiCameraHeight"`
+	RPICameraHFlip             bool           `json:"rpiCameraHFlip"`
+	RPICameraVFlip             bool           `json:"rpiCameraVFlip"`
+	RPICameraBrightness        float64        `json:"rpiCameraBrightness"`
+	RPICameraContrast          float64        `json:"rpiCameraContrast"`
+	RPICameraSaturation        float64        `json:"rpiCameraSaturation"`
+	RPICameraSharpness         float64        `json:"rpiCameraSharpness"`
+	RPICameraExposure          string         `json:"rpiCameraExposure"`
+	RPICameraAWB               string         `json:"rpiCameraAWB"`
+	RPICameraDenoise           string         `json:"rpiCameraDenoise"`
+	RPICameraShutter           int            `json:"rpiCameraShutter"`
+	RPICameraMetering          string         `json:"rpiCameraMetering"`
+	RPICameraGain              float64        `json:"rpiCameraGain"`
+	RPICameraEV                float64        `json:"rpiCameraEV"`
+	RPICameraROI               string         `json:"rpiCameraROI"`
+	RPICameraTuningFile        string         `json:"rpiCameraTuningFile"`
+	RPICameraMode              string         `json:"rpiCameraMode"`
+	RPICameraFPS               int            `json:"rpiCameraFPS"`
+	RPICameraIDRPeriod         int            `json:"rpiCameraIDRPeriod"`
+	RPICameraBitrate           int            `json:"rpiCameraBitrate"`
+	RPICameraProfile           string         `json:"rpiCameraProfile"`
+	RPICameraLevel             string         `json:"rpiCameraLevel"`
 
 	// authentication
 	PublishUser Credential `json:"publishUser"`
@@ -102,7 +126,7 @@ func (pconf *PathConf) checkAndFillMissing(conf *Conf, name string) error {
 	case strings.HasPrefix(pconf.Source, "rtsp://") ||
 		strings.HasPrefix(pconf.Source, "rtsps://"):
 		if pconf.Regexp != nil {
-			return fmt.Errorf("a path with a regular expression (or path 'all') cannot have a RTSP source; use another path")
+			return fmt.Errorf("a path with a regular expression (or path 'all') cannot have a RTSP source. use another path")
 		}
 
 		_, err := url.Parse(pconf.Source)
@@ -110,16 +134,14 @@ func (pconf *PathConf) checkAndFillMissing(conf *Conf, name string) error {
 			return fmt.Errorf("'%s' is not a valid RTSP URL", pconf.Source)
 		}
 
-	case strings.HasPrefix(pconf.Source, "rtmp://"):
+	case strings.HasPrefix(pconf.Source, "rtmp://") ||
+		strings.HasPrefix(pconf.Source, "rtmps://"):
 		if pconf.Regexp != nil {
-			return fmt.Errorf("a path with a regular expression (or path 'all') cannot have a RTMP source; use another path")
+			return fmt.Errorf("a path with a regular expression (or path 'all') cannot have a RTMP source. use another path")
 		}
 
 		u, err := gourl.Parse(pconf.Source)
 		if err != nil {
-			return fmt.Errorf("'%s' is not a valid RTMP URL", pconf.Source)
-		}
-		if u.Scheme != "rtmp" {
 			return fmt.Errorf("'%s' is not a valid RTMP URL", pconf.Source)
 		}
 
@@ -135,7 +157,7 @@ func (pconf *PathConf) checkAndFillMissing(conf *Conf, name string) error {
 	case strings.HasPrefix(pconf.Source, "http://") ||
 		strings.HasPrefix(pconf.Source, "https://"):
 		if pconf.Regexp != nil {
-			return fmt.Errorf("a path with a regular expression (or path 'all') cannot have a HLS source; use another path")
+			return fmt.Errorf("a path with a regular expression (or path 'all') cannot have a HLS source. use another path")
 		}
 
 		u, err := gourl.Parse(pconf.Source)
@@ -163,6 +185,43 @@ func (pconf *PathConf) checkAndFillMissing(conf *Conf, name string) error {
 		_, err := url.Parse(pconf.SourceRedirect)
 		if err != nil {
 			return fmt.Errorf("'%s' is not a valid RTSP URL", pconf.SourceRedirect)
+		}
+
+	case pconf.Source == "rpiCamera":
+		if pconf.Regexp != nil {
+			return fmt.Errorf(
+				"a path with a regular expression (or path 'all') cannot have 'rpiCamera' as source. use another path")
+		}
+
+		if pconf.RPICameraWidth == 0 {
+			pconf.RPICameraWidth = 1920
+		}
+		if pconf.RPICameraHeight == 0 {
+			pconf.RPICameraHeight = 1080
+		}
+		if pconf.RPICameraContrast == 0 {
+			pconf.RPICameraContrast = 1
+		}
+		if pconf.RPICameraSaturation == 0 {
+			pconf.RPICameraSaturation = 1
+		}
+		if pconf.RPICameraSharpness == 0 {
+			pconf.RPICameraSharpness = 1
+		}
+		if pconf.RPICameraFPS == 0 {
+			pconf.RPICameraFPS = 30
+		}
+		if pconf.RPICameraIDRPeriod == 0 {
+			pconf.RPICameraIDRPeriod = 60
+		}
+		if pconf.RPICameraBitrate == 0 {
+			pconf.RPICameraBitrate = 1000000
+		}
+		if pconf.RPICameraProfile == "" {
+			pconf.RPICameraProfile = "main"
+		}
+		if pconf.RPICameraLevel == "" {
+			pconf.RPICameraLevel = "4.1"
 		}
 
 	default:

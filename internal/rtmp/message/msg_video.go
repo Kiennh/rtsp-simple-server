@@ -10,6 +10,11 @@ import (
 	"github.com/aler9/rtsp-simple-server/internal/rtmp/rawmessage"
 )
 
+const (
+	// MsgVideoChunkStreamID is the chunk stream ID that is usually used to send MsgVideo{}
+	MsgVideoChunkStreamID = 6
+)
+
 // MsgVideo is a video message.
 type MsgVideo struct {
 	ChunkStreamID   byte

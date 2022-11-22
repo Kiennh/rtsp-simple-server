@@ -1,12 +1,13 @@
 package rtmp
 
 import (
+	"bytes"
 	"net"
 	"net/url"
 	"testing"
 
 	"github.com/aler9/gortsplib"
-	"github.com/aler9/gortsplib/pkg/aac"
+	"github.com/aler9/gortsplib/pkg/mpeg4audio"
 	"github.com/notedit/rtmp/format/flv/flvio"
 	"github.com/stretchr/testify/require"
 
@@ -36,14 +37,12 @@ func TestInitializeClient(t *testing.T) {
 
 				mrw := message.NewReadWriter(bc, true)
 
-				// C->S set window ack size
 				msg, err := mrw.Read()
 				require.NoError(t, err)
 				require.Equal(t, &message.MsgSetWindowAckSize{
 					Value: 2500000,
 				}, msg)
 
-				// C->S set peer bandwidth
 				msg, err = mrw.Read()
 				require.NoError(t, err)
 				require.Equal(t, &message.MsgSetPeerBandwidth{
@@ -51,14 +50,12 @@ func TestInitializeClient(t *testing.T) {
 					Type:  2,
 				}, msg)
 
-				// C->S set chunk size
 				msg, err = mrw.Read()
 				require.NoError(t, err)
 				require.Equal(t, &message.MsgSetChunkSize{
 					Value: 65536,
 				}, msg)
 
-				// C->S connect
 				msg, err = mrw.Read()
 				require.NoError(t, err)
 				require.Equal(t, &message.MsgCommandAMF0{
@@ -79,7 +76,6 @@ func TestInitializeClient(t *testing.T) {
 					},
 				}, msg)
 
-				// S->C result
 				err = mrw.Write(&message.MsgCommandAMF0{
 					ChunkStreamID: 3,
 					Name:          "_result",
@@ -100,7 +96,6 @@ func TestInitializeClient(t *testing.T) {
 				require.NoError(t, err)
 
 				if ca == "read" {
-					// C->S create stream
 					msg, err = mrw.Read()
 					require.NoError(t, err)
 					require.Equal(t, &message.MsgCommandAMF0{
@@ -112,7 +107,6 @@ func TestInitializeClient(t *testing.T) {
 						},
 					}, msg)
 
-					// S->C result
 					err = mrw.Write(&message.MsgCommandAMF0{
 						ChunkStreamID: 3,
 						Name:          "_result",
@@ -124,33 +118,30 @@ func TestInitializeClient(t *testing.T) {
 					})
 					require.NoError(t, err)
 
-					// C->S user control set buffer length
 					msg, err = mrw.Read()
 					require.NoError(t, err)
 					require.Equal(t, &message.MsgUserControlSetBufferLength{
 						BufferLength: 0x64,
 					}, msg)
 
-					// C->S play
 					msg, err = mrw.Read()
 					require.NoError(t, err)
 					require.Equal(t, &message.MsgCommandAMF0{
 						ChunkStreamID:   4,
 						MessageStreamID: 0x1000000,
 						Name:            "play",
-						CommandID:       0,
+						CommandID:       3,
 						Arguments: []interface{}{
 							nil,
 							"",
 						},
 					}, msg)
 
-					// S->C onStatus
 					err = mrw.Write(&message.MsgCommandAMF0{
 						ChunkStreamID:   5,
 						MessageStreamID: 0x1000000,
 						Name:            "onStatus",
-						CommandID:       4,
+						CommandID:       3,
 						Arguments: []interface{}{
 							nil,
 							flvio.AMFMap{
@@ -162,7 +153,6 @@ func TestInitializeClient(t *testing.T) {
 					})
 					require.NoError(t, err)
 				} else {
-					// C->S releaseStream
 					msg, err = mrw.Read()
 					require.NoError(t, err)
 					require.Equal(t, &message.MsgCommandAMF0{
@@ -175,7 +165,6 @@ func TestInitializeClient(t *testing.T) {
 						},
 					}, msg)
 
-					// C->S FCPublish
 					msg, err = mrw.Read()
 					require.NoError(t, err)
 					require.Equal(t, &message.MsgCommandAMF0{
@@ -188,7 +177,6 @@ func TestInitializeClient(t *testing.T) {
 						},
 					}, msg)
 
-					// C->S createStream
 					msg, err = mrw.Read()
 					require.NoError(t, err)
 					require.Equal(t, &message.MsgCommandAMF0{
@@ -200,7 +188,6 @@ func TestInitializeClient(t *testing.T) {
 						},
 					}, msg)
 
-					// S->C result
 					err = mrw.Write(&message.MsgCommandAMF0{
 						ChunkStreamID: 3,
 						Name:          "_result",
@@ -212,7 +199,6 @@ func TestInitializeClient(t *testing.T) {
 					})
 					require.NoError(t, err)
 
-					// C->S publish
 					msg, err = mrw.Read()
 					require.NoError(t, err)
 					require.Equal(t, &message.MsgCommandAMF0{
@@ -227,7 +213,6 @@ func TestInitializeClient(t *testing.T) {
 						},
 					}, msg)
 
-					// S->C onStatus
 					err = mrw.Write(&message.MsgCommandAMF0{
 						ChunkStreamID:   5,
 						MessageStreamID: 0x1000000,
@@ -256,8 +241,16 @@ func TestInitializeClient(t *testing.T) {
 			defer nconn.Close()
 			conn := NewConn(nconn)
 
-			err = conn.InitializeClient(u, ca == "read")
+			err = conn.InitializeClient(u, ca == "publish")
 			require.NoError(t, err)
+
+			if ca == "read" {
+				require.Equal(t, uint64(3421), conn.BytesReceived())
+				require.Equal(t, uint64(3409), conn.BytesSent())
+			} else {
+				require.Equal(t, uint64(3427), conn.BytesReceived())
+				require.Equal(t, uint64(3466), conn.BytesSent())
+			}
 
 			<-done
 		})
@@ -279,14 +272,14 @@ func TestInitializeServer(t *testing.T) {
 				defer nconn.Close()
 
 				conn := NewConn(nconn)
-				u, isReading, err := conn.InitializeServer()
+				u, isPublishing, err := conn.InitializeServer()
 				require.NoError(t, err)
 				require.Equal(t, &url.URL{
 					Scheme: "rtmp",
 					Host:   "127.0.0.1:9121",
 					Path:   "//stream/",
 				}, u)
-				require.Equal(t, ca == "read", isReading)
+				require.Equal(t, ca == "publish", isPublishing)
 
 				close(done)
 			}()
@@ -301,7 +294,6 @@ func TestInitializeServer(t *testing.T) {
 
 			mrw := message.NewReadWriter(bc, true)
 
-			// C->S connect
 			err = mrw.Write(&message.MsgCommandAMF0{
 				ChunkStreamID: 3,
 				Name:          "connect",
@@ -321,14 +313,12 @@ func TestInitializeServer(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			// S->C window acknowledgement size
 			msg, err := mrw.Read()
 			require.NoError(t, err)
 			require.Equal(t, &message.MsgSetWindowAckSize{
 				Value: 2500000,
 			}, msg)
 
-			// S->C set peer bandwidth
 			msg, err = mrw.Read()
 			require.NoError(t, err)
 			require.Equal(t, &message.MsgSetPeerBandwidth{
@@ -336,14 +326,12 @@ func TestInitializeServer(t *testing.T) {
 				Type:  2,
 			}, msg)
 
-			// S->C set chunk size
 			msg, err = mrw.Read()
 			require.NoError(t, err)
 			require.Equal(t, &message.MsgSetChunkSize{
 				Value: 65536,
 			}, msg)
 
-			// S->C result
 			msg, err = mrw.Read()
 			require.NoError(t, err)
 			require.Equal(t, &message.MsgCommandAMF0{
@@ -364,14 +352,12 @@ func TestInitializeServer(t *testing.T) {
 				},
 			}, msg)
 
-			// C->S set chunk size
 			err = mrw.Write(&message.MsgSetChunkSize{
 				Value: 65536,
 			})
 			require.NoError(t, err)
 
 			if ca == "read" {
-				// C->S createStream
 				err = mrw.Write(&message.MsgCommandAMF0{
 					ChunkStreamID: 3,
 					Name:          "createStream",
@@ -382,7 +368,6 @@ func TestInitializeServer(t *testing.T) {
 				})
 				require.NoError(t, err)
 
-				// S->C result
 				msg, err = mrw.Read()
 				require.NoError(t, err)
 				require.Equal(t, &message.MsgCommandAMF0{
@@ -395,13 +380,11 @@ func TestInitializeServer(t *testing.T) {
 					},
 				}, msg)
 
-				// C->S user control set buffer length
 				err = mrw.Write(&message.MsgUserControlSetBufferLength{
 					BufferLength: 0x64,
 				})
 				require.NoError(t, err)
 
-				// C->S play
 				err = mrw.Write(&message.MsgCommandAMF0{
 					ChunkStreamID:   4,
 					MessageStreamID: 0x1000000,
@@ -414,7 +397,6 @@ func TestInitializeServer(t *testing.T) {
 				})
 				require.NoError(t, err)
 			} else {
-				// C->S releaseStream
 				err = mrw.Write(&message.MsgCommandAMF0{
 					ChunkStreamID: 3,
 					Name:          "releaseStream",
@@ -426,7 +408,6 @@ func TestInitializeServer(t *testing.T) {
 				})
 				require.NoError(t, err)
 
-				// C->S FCPublish
 				err = mrw.Write(&message.MsgCommandAMF0{
 					ChunkStreamID: 3,
 					Name:          "FCPublish",
@@ -438,7 +419,6 @@ func TestInitializeServer(t *testing.T) {
 				})
 				require.NoError(t, err)
 
-				// C->S createStream
 				err = mrw.Write(&message.MsgCommandAMF0{
 					ChunkStreamID: 3,
 					Name:          "createStream",
@@ -449,7 +429,6 @@ func TestInitializeServer(t *testing.T) {
 				})
 				require.NoError(t, err)
 
-				// S->C result
 				msg, err = mrw.Read()
 				require.NoError(t, err)
 				require.Equal(t, &message.MsgCommandAMF0{
@@ -462,7 +441,6 @@ func TestInitializeServer(t *testing.T) {
 					},
 				}, msg)
 
-				// C->S publish
 				err = mrw.Write(&message.MsgCommandAMF0{
 					ChunkStreamID:   4,
 					MessageStreamID: 0x1000000,
@@ -494,7 +472,8 @@ func TestReadTracks(t *testing.T) {
 	}
 
 	for _, ca := range []string{
-		"standard",
+		"video+audio",
+		"video",
 		"metadata without codec id",
 		"missing metadata",
 	} {
@@ -518,16 +497,17 @@ func TestReadTracks(t *testing.T) {
 				require.NoError(t, err)
 
 				switch ca {
-				case "standard":
+				case "video+audio":
 					require.Equal(t, &gortsplib.TrackH264{
-						PayloadType: 96,
-						SPS:         sps,
-						PPS:         pps,
+						PayloadType:       96,
+						SPS:               sps,
+						PPS:               pps,
+						PacketizationMode: 1,
 					}, videoTrack)
 
-					require.Equal(t, &gortsplib.TrackAAC{
+					require.Equal(t, &gortsplib.TrackMPEG4Audio{
 						PayloadType: 96,
-						Config: &aac.MPEG4AudioConfig{
+						Config: &mpeg4audio.Config{
 							Type:         2,
 							SampleRate:   44100,
 							ChannelCount: 2,
@@ -537,16 +517,27 @@ func TestReadTracks(t *testing.T) {
 						IndexDeltaLength: 3,
 					}, audioTrack)
 
-				case "metadata without codec id":
+				case "video":
 					require.Equal(t, &gortsplib.TrackH264{
-						PayloadType: 96,
-						SPS:         sps,
-						PPS:         pps,
+						PayloadType:       96,
+						SPS:               sps,
+						PPS:               pps,
+						PacketizationMode: 1,
 					}, videoTrack)
 
-					require.Equal(t, &gortsplib.TrackAAC{
+					require.Nil(t, audioTrack)
+
+				case "metadata without codec id":
+					require.Equal(t, &gortsplib.TrackH264{
+						PayloadType:       96,
+						SPS:               sps,
+						PPS:               pps,
+						PacketizationMode: 1,
+					}, videoTrack)
+
+					require.Equal(t, &gortsplib.TrackMPEG4Audio{
 						PayloadType: 96,
-						Config: &aac.MPEG4AudioConfig{
+						Config: &mpeg4audio.Config{
 							Type:         2,
 							SampleRate:   44100,
 							ChannelCount: 2,
@@ -558,14 +549,15 @@ func TestReadTracks(t *testing.T) {
 
 				case "missing metadata":
 					require.Equal(t, &gortsplib.TrackH264{
-						PayloadType: 96,
-						SPS:         sps,
-						PPS:         pps,
+						PayloadType:       96,
+						SPS:               sps,
+						PPS:               pps,
+						PacketizationMode: 1,
 					}, videoTrack)
 
-					require.Equal(t, &gortsplib.TrackAAC{
+					require.Equal(t, &gortsplib.TrackMPEG4Audio{
 						PayloadType: 96,
-						Config: &aac.MPEG4AudioConfig{
+						Config: &mpeg4audio.Config{
 							Type:         2,
 							SampleRate:   44100,
 							ChannelCount: 2,
@@ -589,7 +581,6 @@ func TestReadTracks(t *testing.T) {
 
 			mrw := message.NewReadWriter(bc, true)
 
-			// C->S connect
 			err = mrw.Write(&message.MsgCommandAMF0{
 				ChunkStreamID: 3,
 				Name:          "connect",
@@ -609,14 +600,12 @@ func TestReadTracks(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			// S->C window acknowledgement size
 			msg, err := mrw.Read()
 			require.NoError(t, err)
 			require.Equal(t, &message.MsgSetWindowAckSize{
 				Value: 2500000,
 			}, msg)
 
-			// S->C set peer bandwidth
 			msg, err = mrw.Read()
 			require.NoError(t, err)
 			require.Equal(t, &message.MsgSetPeerBandwidth{
@@ -624,14 +613,12 @@ func TestReadTracks(t *testing.T) {
 				Type:  2,
 			}, msg)
 
-			// S->C set chunk size
 			msg, err = mrw.Read()
 			require.NoError(t, err)
 			require.Equal(t, &message.MsgSetChunkSize{
 				Value: 65536,
 			}, msg)
 
-			// S->C result
 			msg, err = mrw.Read()
 			require.NoError(t, err)
 			require.Equal(t, &message.MsgCommandAMF0{
@@ -652,13 +639,11 @@ func TestReadTracks(t *testing.T) {
 				},
 			}, msg)
 
-			// C->S set chunk size
 			err = mrw.Write(&message.MsgSetChunkSize{
 				Value: 65536,
 			})
 			require.NoError(t, err)
 
-			// C->S releaseStream
 			err = mrw.Write(&message.MsgCommandAMF0{
 				ChunkStreamID: 3,
 				Name:          "releaseStream",
@@ -670,7 +655,6 @@ func TestReadTracks(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			// C->S FCPublish
 			err = mrw.Write(&message.MsgCommandAMF0{
 				ChunkStreamID: 3,
 				Name:          "FCPublish",
@@ -682,7 +666,6 @@ func TestReadTracks(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			// C->S createStream
 			err = mrw.Write(&message.MsgCommandAMF0{
 				ChunkStreamID: 3,
 				Name:          "createStream",
@@ -693,7 +676,6 @@ func TestReadTracks(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			// S->C result
 			msg, err = mrw.Read()
 			require.NoError(t, err)
 			require.Equal(t, &message.MsgCommandAMF0{
@@ -706,7 +688,6 @@ func TestReadTracks(t *testing.T) {
 				},
 			}, msg)
 
-			// C->S publish
 			err = mrw.Write(&message.MsgCommandAMF0{
 				ChunkStreamID:   8,
 				MessageStreamID: 1,
@@ -720,7 +701,6 @@ func TestReadTracks(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			// S->C onStatus
 			msg, err = mrw.Read()
 			require.NoError(t, err)
 			require.Equal(t, &message.MsgCommandAMF0{
@@ -739,8 +719,8 @@ func TestReadTracks(t *testing.T) {
 			}, msg)
 
 			switch ca {
-			case "standard":
-				// C->S metadata
+			case "video+audio":
+
 				err = mrw.Write(&message.MsgDataAMF0{
 					ChunkStreamID:   4,
 					MessageStreamID: 1,
@@ -769,30 +749,28 @@ func TestReadTracks(t *testing.T) {
 				})
 				require.NoError(t, err)
 
-				// C->S H264 decoder config
 				buf, _ := h264conf.Conf{
 					SPS: sps,
 					PPS: pps,
 				}.Marshal()
 				err = mrw.Write(&message.MsgVideo{
-					ChunkStreamID:   6,
-					MessageStreamID: 1,
+					ChunkStreamID:   message.MsgVideoChunkStreamID,
+					MessageStreamID: 0x1000000,
 					IsKeyFrame:      true,
 					H264Type:        flvio.AVC_SEQHDR,
 					Payload:         buf,
 				})
 				require.NoError(t, err)
 
-				// C->S AAC decoder config
-				enc, err := aac.MPEG4AudioConfig{
+				enc, err := mpeg4audio.Config{
 					Type:         2,
 					SampleRate:   44100,
 					ChannelCount: 2,
 				}.Marshal()
 				require.NoError(t, err)
 				err = mrw.Write(&message.MsgAudio{
-					ChunkStreamID:   4,
-					MessageStreamID: 1,
+					ChunkStreamID:   message.MsgAudioChunkStreamID,
+					MessageStreamID: 0x1000000,
 					Rate:            flvio.SOUND_44Khz,
 					Depth:           flvio.SOUND_16BIT,
 					Channels:        flvio.SOUND_STEREO,
@@ -801,8 +779,51 @@ func TestReadTracks(t *testing.T) {
 				})
 				require.NoError(t, err)
 
+			case "video":
+
+				err = mrw.Write(&message.MsgDataAMF0{
+					ChunkStreamID:   4,
+					MessageStreamID: 1,
+					Payload: []interface{}{
+						"@setDataFrame",
+						"onMetaData",
+						flvio.AMFMap{
+							{
+								K: "videodatarate",
+								V: float64(0),
+							},
+							{
+								K: "videocodecid",
+								V: float64(codecH264),
+							},
+							{
+								K: "audiodatarate",
+								V: float64(0),
+							},
+							{
+								K: "audiocodecid",
+								V: float64(0),
+							},
+						},
+					},
+				})
+				require.NoError(t, err)
+
+				buf, _ := h264conf.Conf{
+					SPS: sps,
+					PPS: pps,
+				}.Marshal()
+				err = mrw.Write(&message.MsgVideo{
+					ChunkStreamID:   message.MsgVideoChunkStreamID,
+					MessageStreamID: 0x1000000,
+					IsKeyFrame:      true,
+					H264Type:        flvio.AVC_SEQHDR,
+					Payload:         buf,
+				})
+				require.NoError(t, err)
+
 			case "metadata without codec id":
-				// C->S metadata
+
 				err = mrw.Write(&message.MsgDataAMF0{
 					ChunkStreamID:   4,
 					MessageStreamID: 1,
@@ -827,30 +848,28 @@ func TestReadTracks(t *testing.T) {
 				})
 				require.NoError(t, err)
 
-				// C->S H264 decoder config
 				buf, _ := h264conf.Conf{
 					SPS: sps,
 					PPS: pps,
 				}.Marshal()
 				err = mrw.Write(&message.MsgVideo{
-					ChunkStreamID:   6,
-					MessageStreamID: 1,
+					ChunkStreamID:   message.MsgVideoChunkStreamID,
+					MessageStreamID: 0x1000000,
 					IsKeyFrame:      true,
 					H264Type:        flvio.AVC_SEQHDR,
 					Payload:         buf,
 				})
 				require.NoError(t, err)
 
-				// C->S AAC decoder config
-				enc, err := aac.MPEG4AudioConfig{
+				enc, err := mpeg4audio.Config{
 					Type:         2,
 					SampleRate:   44100,
 					ChannelCount: 2,
 				}.Marshal()
 				require.NoError(t, err)
 				err = mrw.Write(&message.MsgAudio{
-					ChunkStreamID:   4,
-					MessageStreamID: 1,
+					ChunkStreamID:   message.MsgAudioChunkStreamID,
+					MessageStreamID: 0x1000000,
 					Rate:            flvio.SOUND_44Khz,
 					Depth:           flvio.SOUND_16BIT,
 					Channels:        flvio.SOUND_STEREO,
@@ -860,30 +879,29 @@ func TestReadTracks(t *testing.T) {
 				require.NoError(t, err)
 
 			case "missing metadata":
-				// C->S H264 decoder config
+
 				buf, _ := h264conf.Conf{
 					SPS: sps,
 					PPS: pps,
 				}.Marshal()
 				err = mrw.Write(&message.MsgVideo{
-					ChunkStreamID:   6,
-					MessageStreamID: 1,
+					ChunkStreamID:   message.MsgVideoChunkStreamID,
+					MessageStreamID: 0x1000000,
 					IsKeyFrame:      true,
 					H264Type:        flvio.AVC_SEQHDR,
 					Payload:         buf,
 				})
 				require.NoError(t, err)
 
-				// C->S AAC decoder config
-				enc, err := aac.MPEG4AudioConfig{
+				enc, err := mpeg4audio.Config{
 					Type:         2,
 					SampleRate:   44100,
 					ChannelCount: 2,
 				}.Marshal()
 				require.NoError(t, err)
 				err = mrw.Write(&message.MsgAudio{
-					ChunkStreamID:   4,
-					MessageStreamID: 1,
+					ChunkStreamID:   message.MsgAudioChunkStreamID,
+					MessageStreamID: 0x1000000,
 					Rate:            flvio.SOUND_44Khz,
 					Depth:           flvio.SOUND_16BIT,
 					Channels:        flvio.SOUND_STEREO,
@@ -922,11 +940,12 @@ func TestWriteTracks(t *testing.T) {
 			PPS: []byte{
 				0x68, 0xee, 0x3c, 0x80,
 			},
+			PacketizationMode: 1,
 		}
 
-		audioTrack := &gortsplib.TrackAAC{
+		audioTrack := &gortsplib.TrackMPEG4Audio{
 			PayloadType: 96,
-			Config: &aac.MPEG4AudioConfig{
+			Config: &mpeg4audio.Config{
 				Type:         2,
 				SampleRate:   44100,
 				ChannelCount: 2,
@@ -950,7 +969,6 @@ func TestWriteTracks(t *testing.T) {
 
 	mrw := message.NewReadWriter(bc, true)
 
-	// C->S connect
 	err = mrw.Write(&message.MsgCommandAMF0{
 		ChunkStreamID: 3,
 		Name:          "connect",
@@ -970,14 +988,12 @@ func TestWriteTracks(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// S->C window acknowledgement size
 	msg, err := mrw.Read()
 	require.NoError(t, err)
 	require.Equal(t, &message.MsgSetWindowAckSize{
 		Value: 2500000,
 	}, msg)
 
-	// S->C set peer bandwidth
 	msg, err = mrw.Read()
 	require.NoError(t, err)
 	require.Equal(t, &message.MsgSetPeerBandwidth{
@@ -985,14 +1001,12 @@ func TestWriteTracks(t *testing.T) {
 		Type:  2,
 	}, msg)
 
-	// S->C set chunk size
 	msg, err = mrw.Read()
 	require.NoError(t, err)
 	require.Equal(t, &message.MsgSetChunkSize{
 		Value: 65536,
 	}, msg)
 
-	// S->C result
 	msg, err = mrw.Read()
 	require.NoError(t, err)
 	require.Equal(t, &message.MsgCommandAMF0{
@@ -1013,19 +1027,16 @@ func TestWriteTracks(t *testing.T) {
 		},
 	}, msg)
 
-	// C->S window acknowledgement size
 	err = mrw.Write(&message.MsgSetWindowAckSize{
 		Value: 2500000,
 	})
 	require.NoError(t, err)
 
-	// C->S set chunk size
 	err = mrw.Write(&message.MsgSetChunkSize{
 		Value: 65536,
 	})
 	require.NoError(t, err)
 
-	// C->S createStream
 	err = mrw.Write(&message.MsgCommandAMF0{
 		ChunkStreamID: 3,
 		Name:          "createStream",
@@ -1036,7 +1047,6 @@ func TestWriteTracks(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// S->C result
 	msg, err = mrw.Read()
 	require.NoError(t, err)
 	require.Equal(t, &message.MsgCommandAMF0{
@@ -1049,7 +1059,6 @@ func TestWriteTracks(t *testing.T) {
 		},
 	}, msg)
 
-	// C->S getStreamLength
 	err = mrw.Write(&message.MsgCommandAMF0{
 		ChunkStreamID: 8,
 		Name:          "getStreamLength",
@@ -1061,7 +1070,6 @@ func TestWriteTracks(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// C->S play
 	err = mrw.Write(&message.MsgCommandAMF0{
 		ChunkStreamID:   8,
 		MessageStreamID: 0x1000000,
@@ -1075,21 +1083,18 @@ func TestWriteTracks(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// S->C event "stream is recorded"
 	msg, err = mrw.Read()
 	require.NoError(t, err)
 	require.Equal(t, &message.MsgUserControlStreamIsRecorded{
 		StreamID: 1,
 	}, msg)
 
-	// S->C event "stream begin 1"
 	msg, err = mrw.Read()
 	require.NoError(t, err)
 	require.Equal(t, &message.MsgUserControlStreamBegin{
 		StreamID: 1,
 	}, msg)
 
-	// S->C onStatus
 	msg, err = mrw.Read()
 	require.NoError(t, err)
 	require.Equal(t, &message.MsgCommandAMF0{
@@ -1107,7 +1112,6 @@ func TestWriteTracks(t *testing.T) {
 		},
 	}, msg)
 
-	// S->C onStatus
 	msg, err = mrw.Read()
 	require.NoError(t, err)
 	require.Equal(t, &message.MsgCommandAMF0{
@@ -1125,7 +1129,6 @@ func TestWriteTracks(t *testing.T) {
 		},
 	}, msg)
 
-	// S->C onStatus
 	msg, err = mrw.Read()
 	require.NoError(t, err)
 	require.Equal(t, &message.MsgCommandAMF0{
@@ -1143,7 +1146,6 @@ func TestWriteTracks(t *testing.T) {
 		},
 	}, msg)
 
-	// S->C onStatus
 	msg, err = mrw.Read()
 	require.NoError(t, err)
 	require.Equal(t, &message.MsgCommandAMF0{
@@ -1161,7 +1163,6 @@ func TestWriteTracks(t *testing.T) {
 		},
 	}, msg)
 
-	// S->C onMetadata
 	msg, err = mrw.Read()
 	require.NoError(t, err)
 	require.Equal(t, &message.MsgDataAMF0{
@@ -1179,11 +1180,10 @@ func TestWriteTracks(t *testing.T) {
 		},
 	}, msg)
 
-	// S->C H264 decoder config
 	msg, err = mrw.Read()
 	require.NoError(t, err)
 	require.Equal(t, &message.MsgVideo{
-		ChunkStreamID:   6,
+		ChunkStreamID:   message.MsgVideoChunkStreamID,
 		MessageStreamID: 0x1000000,
 		IsKeyFrame:      true,
 		H264Type:        flvio.AVC_SEQHDR,
@@ -1197,11 +1197,10 @@ func TestWriteTracks(t *testing.T) {
 		},
 	}, msg)
 
-	// S->C AAC decoder config
 	msg, err = mrw.Read()
 	require.NoError(t, err)
 	require.Equal(t, &message.MsgAudio{
-		ChunkStreamID:   4,
+		ChunkStreamID:   message.MsgAudioChunkStreamID,
 		MessageStreamID: 0x1000000,
 		Rate:            flvio.SOUND_44Khz,
 		Depth:           flvio.SOUND_16BIT,
@@ -1209,4 +1208,33 @@ func TestWriteTracks(t *testing.T) {
 		AACType:         flvio.AAC_SEQHDR,
 		Payload:         []byte{0x12, 0x10},
 	}, msg)
+}
+
+func BenchmarkRead(b *testing.B) {
+	var buf bytes.Buffer
+
+	for n := 0; n < b.N; n++ {
+		buf.Write([]byte{
+			7, 0, 0, 23, 0, 0, 98, 8,
+			0, 0, 0, 64, 175, 1, 1, 2,
+			3, 4, 1, 2, 3, 4, 1, 2,
+			3, 4, 1, 2, 3, 4, 1, 2,
+			3, 4, 1, 2, 3, 4, 1, 2,
+			3, 4, 1, 2, 3, 4, 1, 2,
+			3, 4, 1, 2, 3, 4, 1, 2,
+			3, 4, 1, 2, 3, 4, 1, 2,
+			3, 4, 1, 2, 3, 4, 1, 2,
+			3, 4, 1, 2, 3, 4, 1, 2,
+			3, 4, 1, 2, 3, 4, 1, 2,
+			3, 4, 1, 2, 3, 4, 1, 2,
+			3, 4, 1, 2, 3, 4, 1, 2,
+			3, 4, 1, 2, 3, 4,
+		})
+	}
+
+	conn := NewConn(&buf)
+
+	for n := 0; n < b.N; n++ {
+		conn.ReadMessage()
+	}
 }

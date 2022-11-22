@@ -2,15 +2,17 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/aler9/gortsplib"
 	"github.com/aler9/gortsplib/pkg/h264"
-	"github.com/aler9/gortsplib/pkg/rtpaac"
-	"github.com/aler9/gortsplib/pkg/rtph264"
 	"github.com/notedit/rtmp/format/flv/flvio"
 
 	"github.com/aler9/rtsp-simple-server/internal/conf"
@@ -27,6 +29,7 @@ type rtmpSourceParent interface {
 
 type rtmpSource struct {
 	ur           string
+	fingerprint  string
 	readTimeout  conf.StringDuration
 	writeTimeout conf.StringDuration
 	parent       rtmpSourceParent
@@ -34,12 +37,14 @@ type rtmpSource struct {
 
 func newRTMPSource(
 	ur string,
+	fingerprint string,
 	readTimeout conf.StringDuration,
 	writeTimeout conf.StringDuration,
 	parent rtmpSourceParent,
 ) *rtmpSource {
 	return &rtmpSource{
 		ur:           ur,
+		fingerprint:  fingerprint,
 		readTimeout:  readTimeout,
 		writeTimeout: writeTimeout,
 		parent:       parent,
@@ -68,8 +73,30 @@ func (s *rtmpSource) run(ctx context.Context) error {
 	ctx2, cancel2 := context.WithTimeout(ctx, time.Duration(s.readTimeout))
 	defer cancel2()
 
-	var d net.Dialer
-	nconn, err := d.DialContext(ctx2, "tcp", u.Host)
+	nconn, err := func() (net.Conn, error) {
+		if u.Scheme == "rtmp" {
+			return (&net.Dialer{}).DialContext(ctx2, "tcp", u.Host)
+		}
+
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: true,
+			VerifyConnection: func(cs tls.ConnectionState) error {
+				h := sha256.New()
+				h.Write(cs.PeerCertificates[0].Raw)
+				hstr := hex.EncodeToString(h.Sum(nil))
+				fingerprintLower := strings.ToLower(s.fingerprint)
+
+				if hstr != fingerprintLower {
+					return fmt.Errorf("server fingerprint do not match: expected %s, got %s",
+						fingerprintLower, hstr)
+				}
+
+				return nil
+			},
+		}
+
+		return (&tls.Dialer{Config: tlsConfig}).DialContext(ctx2, "tcp", u.Host)
+	}()
 	if err != nil {
 		return err
 	}
@@ -81,7 +108,7 @@ func (s *rtmpSource) run(ctx context.Context) error {
 		readDone <- func() error {
 			nconn.SetReadDeadline(time.Now().Add(time.Duration(s.readTimeout)))
 			nconn.SetWriteDeadline(time.Now().Add(time.Duration(s.writeTimeout)))
-			err = conn.InitializeClient(u, true)
+			err = conn.InitializeClient(u, false)
 			if err != nil {
 				return err
 			}
@@ -97,38 +124,32 @@ func (s *rtmpSource) run(ctx context.Context) error {
 			videoTrackID := -1
 			audioTrackID := -1
 
-			var h264Encoder *rtph264.Encoder
 			if videoTrack != nil {
-				h264Encoder = &rtph264.Encoder{PayloadType: 96}
-				h264Encoder.Init()
 				videoTrackID = len(tracks)
 				tracks = append(tracks, videoTrack)
 			}
 
-			var aacEncoder *rtpaac.Encoder
 			if audioTrack != nil {
-				aacEncoder = &rtpaac.Encoder{
-					PayloadType:      96,
-					SampleRate:       audioTrack.ClockRate(),
-					SizeLength:       13,
-					IndexLength:      3,
-					IndexDeltaLength: 3,
-				}
-				aacEncoder.Init()
 				audioTrackID = len(tracks)
 				tracks = append(tracks, audioTrack)
 			}
 
-			res := s.parent.sourceStaticImplSetReady(pathSourceStaticSetReadyReq{tracks: tracks})
+			res := s.parent.sourceStaticImplSetReady(pathSourceStaticSetReadyReq{
+				tracks:             tracks,
+				generateRTPPackets: true,
+			})
 			if res.err != nil {
 				return res.err
 			}
 
-			s.Log(logger.Info, "ready")
+			s.Log(logger.Info, "ready: %s", sourceTrackInfo(tracks))
 
 			defer func() {
 				s.parent.sourceStaticImplSetNotReady(pathSourceStaticSetNotReadyReq{})
 			}()
+
+			// disable write deadline to allow outgoing acknowledges
+			nconn.SetWriteDeadline(time.Time{})
 
 			for {
 				nconn.SetReadDeadline(time.Now().Add(time.Duration(s.readTimeout)))
@@ -149,30 +170,13 @@ func (s *rtmpSource) run(ctx context.Context) error {
 							return fmt.Errorf("unable to decode AVCC: %v", err)
 						}
 
-						pts := tmsg.DTS + tmsg.PTSDelta
-
-						pkts, err := h264Encoder.Encode(nalus, pts)
+						err = res.stream.writeData(&dataH264{
+							trackID: videoTrackID,
+							pts:     tmsg.DTS + tmsg.PTSDelta,
+							nalus:   nalus,
+						})
 						if err != nil {
-							return fmt.Errorf("error while encoding H264: %v", err)
-						}
-
-						lastPkt := len(pkts) - 1
-						for i, pkt := range pkts {
-							if i != lastPkt {
-								res.stream.writeData(&data{
-									trackID:      videoTrackID,
-									rtp:          pkt,
-									ptsEqualsDTS: false,
-								})
-							} else {
-								res.stream.writeData(&data{
-									trackID:      videoTrackID,
-									rtp:          pkt,
-									ptsEqualsDTS: h264.IDRPresent(nalus),
-									h264NALUs:    nalus,
-									h264PTS:      pts,
-								})
-							}
+							s.Log(logger.Warn, "%v", err)
 						}
 					}
 
@@ -182,17 +186,13 @@ func (s *rtmpSource) run(ctx context.Context) error {
 							return fmt.Errorf("received an AAC packet, but track is not set up")
 						}
 
-						pkts, err := aacEncoder.Encode([][]byte{tmsg.Payload}, tmsg.DTS)
+						err := res.stream.writeData(&dataMPEG4Audio{
+							trackID: audioTrackID,
+							pts:     tmsg.DTS,
+							aus:     [][]byte{tmsg.Payload},
+						})
 						if err != nil {
-							return fmt.Errorf("error while encoding AAC: %v", err)
-						}
-
-						for _, pkt := range pkts {
-							res.stream.writeData(&data{
-								trackID:      audioTrackID,
-								rtp:          pkt,
-								ptsEqualsDTS: true,
-							})
+							s.Log(logger.Warn, "%v", err)
 						}
 					}
 				}

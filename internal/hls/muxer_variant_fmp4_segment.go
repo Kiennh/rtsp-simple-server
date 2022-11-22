@@ -24,11 +24,11 @@ func (mbr *partsReader) Read(p []byte) (int, error) {
 			return n, io.EOF
 		}
 
-		copied := copy(p[n:], mbr.parts[mbr.curPart].renderedContent[mbr.curPos:])
+		copied := copy(p[n:], mbr.parts[mbr.curPart].content[mbr.curPos:])
 		mbr.curPos += copied
 		n += copied
 
-		if mbr.curPos == len(mbr.parts[mbr.curPart].renderedContent) {
+		if mbr.curPos == len(mbr.parts[mbr.curPart].content) {
 			mbr.curPart++
 			mbr.curPos = 0
 		}
@@ -46,10 +46,11 @@ type muxerVariantFMP4Segment struct {
 	startDTS        time.Duration
 	segmentMaxSize  uint64
 	videoTrack      *gortsplib.TrackH264
-	audioTrack      *gortsplib.TrackAAC
+	audioTrack      *gortsplib.TrackMPEG4Audio
 	genPartID       func() uint64
 	onPartFinalized func(*muxerVariantFMP4Part)
 
+	name             string
 	size             uint64
 	parts            []*muxerVariantFMP4Part
 	currentPart      *muxerVariantFMP4Part
@@ -63,7 +64,7 @@ func newMuxerVariantFMP4Segment(
 	startDTS time.Duration,
 	segmentMaxSize uint64,
 	videoTrack *gortsplib.TrackH264,
-	audioTrack *gortsplib.TrackAAC,
+	audioTrack *gortsplib.TrackMPEG4Audio,
 	genPartID func() uint64,
 	onPartFinalized func(*muxerVariantFMP4Part),
 ) *muxerVariantFMP4Segment {
@@ -77,6 +78,7 @@ func newMuxerVariantFMP4Segment(
 		audioTrack:      audioTrack,
 		genPartID:       genPartID,
 		onPartFinalized: onPartFinalized,
+		name:            "seg" + strconv.FormatUint(id, 10),
 	}
 
 	s.currentPart = newMuxerVariantFMP4Part(
@@ -88,10 +90,6 @@ func newMuxerVariantFMP4Segment(
 	return s
 }
 
-func (s *muxerVariantFMP4Segment) name() string {
-	return "seg" + strconv.FormatUint(s.id, 10)
-}
-
 func (s *muxerVariantFMP4Segment) reader() io.Reader {
 	return &partsReader{parts: s.parts}
 }
@@ -101,15 +99,14 @@ func (s *muxerVariantFMP4Segment) getRenderedDuration() time.Duration {
 }
 
 func (s *muxerVariantFMP4Segment) finalize(
-	nextVideoSample *fmp4VideoSample,
-	nextAudioSample *fmp4AudioSample,
+	nextVideoSampleDTS time.Duration,
 ) error {
 	err := s.currentPart.finalize()
 	if err != nil {
 		return err
 	}
 
-	if s.currentPart.renderedContent != nil {
+	if s.currentPart.content != nil {
 		s.onPartFinalized(s.currentPart)
 		s.parts = append(s.parts, s.currentPart)
 	}
@@ -117,7 +114,7 @@ func (s *muxerVariantFMP4Segment) finalize(
 	s.currentPart = nil
 
 	if s.videoTrack != nil {
-		s.renderedDuration = nextVideoSample.dts - s.startDTS
+		s.renderedDuration = nextVideoSampleDTS - s.startDTS
 	} else {
 		s.renderedDuration = 0
 		for _, pa := range s.parts {
@@ -128,16 +125,14 @@ func (s *muxerVariantFMP4Segment) finalize(
 	return nil
 }
 
-func (s *muxerVariantFMP4Segment) writeH264(sample *fmp4VideoSample, adjustedPartDuration time.Duration) error {
-	size := uint64(len(sample.avcc))
-
+func (s *muxerVariantFMP4Segment) writeH264(sample *augmentedVideoSample, adjustedPartDuration time.Duration) error {
+	size := uint64(len(sample.Payload))
 	if (s.size + size) > s.segmentMaxSize {
 		return fmt.Errorf("reached maximum segment size")
 	}
+	s.size += size
 
 	s.currentPart.writeH264(sample)
-
-	s.size += size
 
 	// switch part
 	if s.lowLatency &&
@@ -160,16 +155,14 @@ func (s *muxerVariantFMP4Segment) writeH264(sample *fmp4VideoSample, adjustedPar
 	return nil
 }
 
-func (s *muxerVariantFMP4Segment) writeAAC(sample *fmp4AudioSample, adjustedPartDuration time.Duration) error {
-	size := uint64(len(sample.au))
-
+func (s *muxerVariantFMP4Segment) writeAAC(sample *augmentedAudioSample, adjustedPartDuration time.Duration) error {
+	size := uint64(len(sample.Payload))
 	if (s.size + size) > s.segmentMaxSize {
 		return fmt.Errorf("reached maximum segment size")
 	}
+	s.size += size
 
 	s.currentPart.writeAAC(sample)
-
-	s.size += size
 
 	// switch part
 	if s.lowLatency && s.videoTrack == nil &&

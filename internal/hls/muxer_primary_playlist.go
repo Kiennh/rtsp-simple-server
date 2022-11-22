@@ -14,13 +14,13 @@ import (
 type muxerPrimaryPlaylist struct {
 	fmp4       bool
 	videoTrack *gortsplib.TrackH264
-	audioTrack *gortsplib.TrackAAC
+	audioTrack *gortsplib.TrackMPEG4Audio
 }
 
 func newMuxerPrimaryPlaylist(
 	fmp4 bool,
 	videoTrack *gortsplib.TrackH264,
-	audioTrack *gortsplib.TrackAAC,
+	audioTrack *gortsplib.TrackMPEG4Audio,
 ) *muxerPrimaryPlaylist {
 	return &muxerPrimaryPlaylist{
 		fmp4:       fmp4,
@@ -33,7 +33,7 @@ func (p *muxerPrimaryPlaylist) file(session string) *MuxerFileResponse {
 	return &MuxerFileResponse{
 		Status: http.StatusOK,
 		Header: map[string]string{
-			"Content-Type": `audio/mpegURL`,
+			"Content-Type": `application/x-mpegURL`,
 		},
 		Body: func() io.Reader {
 			var codecs []string
@@ -65,8 +65,7 @@ func (p *muxerPrimaryPlaylist) file(session string) *MuxerFileResponse {
 					"#EXT-X-INDEPENDENT-SEGMENTS\n" +
 					"\n" +
 					"#EXT-X-STREAM-INF:BANDWIDTH=200000,CODECS=\"" + strings.Join(codecs, ",") + "\"\n" +
-					session + "/stream.m3u8\n" +
-					"\n"))
+					session + "/stream.m3u8\n"))
 			}
 		}(),
 	}
